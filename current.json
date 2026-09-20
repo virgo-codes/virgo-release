@@ -1,0 +1,14 @@
+{
+  "version": "0.1.0-preview.1",
+  "release": "803e8069057aa88a3a39c4a9690c4d1a1c051fda2e53a22e0fd5051b3a6fbc05",
+  "sourceRepository": "virgo-codes/virgo",
+  "sourceCommit": "9a3497d7c96c04e7bfbd5e360a6bca432c2c1970",
+  "platform": {
+    "os": "macos",
+    "architecture": "arm64"
+  },
+  "bunVersion": "1.3.14",
+  "archiveSha256": "2d03442172710c56b6aa1ed18a813c71fb9556c4795437d0057e9dd8324f8687",
+  "manifestDigest": "a84421f65b9791335c58b38e55c39f342e35990d236d027ea1a914ed667a4e48",
+  "cliSha256": "c6974545e237e1d05a28db5d81d81cffa06809406d527ecd493e12bb25a02bb5"
+}
