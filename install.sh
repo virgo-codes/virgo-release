@@ -32,7 +32,7 @@ for argument in "$@"; do [[ "$argument" == "--machine" ]] && has_machine=true; d
 $has_machine || fail "--machine is required."
 
 cleanup_dir="$(mktemp -d "${TMPDIR:-/tmp}/virgo-release.XXXXXX")"
-gh release download "$release" --repo "$REPOSITORY" --pattern "$ASSET" --dir "$cleanup_dir"
+gh release download "release-$release" --repo "$REPOSITORY" --pattern "$ASSET" --dir "$cleanup_dir"
 asset="$cleanup_dir/$ASSET"
 [[ -f "$asset" ]] || fail "release asset was not downloaded."
 actual_sha="$(shasum -a 256 "$asset" | awk '{print $1}')"
