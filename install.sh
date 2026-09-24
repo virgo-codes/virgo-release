@@ -25,6 +25,7 @@ fi
 seen_flags=" "
 forwarded=()
 has_machine=false
+has_mode=false
 has_plan=false
 while [[ $# -gt 0 ]]; do
   flag="$1"
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     esac
   fi
   case "$flag" in
-    --mode) mode="$2" ;;
+    --mode) mode="$2"; has_mode=true ;;
     --root) [[ "$2" == /* ]] || fail "--root must be an absolute path."; forwarded+=("$flag" "$2") ;;
     --machine) has_machine=true; forwarded+=("$flag" "$2") ;;
     --plan-id) has_plan=true; forwarded+=("$flag" "$2") ;;
@@ -54,8 +55,9 @@ while [[ $# -gt 0 ]]; do
 done
 case "$mode" in local|host) ;; *) fail "--mode must be local or host." ;; esac
 $has_machine || fail "--machine is required."
-[[ "$operation" == "install" || "$mode" == "host" ]] || fail "$operation requires --mode host."
+[[ "$operation" == "install" ]] || $has_mode || fail "$operation requires an explicit --mode."
 if [[ "$operation" == "rollback" ]]; then
+  [[ "$mode" == "host" ]] || fail "bootstrap rollback requires --mode host."
   $has_plan || fail "rollback requires --plan-id from the prior successful upgrade."
 else
   ! $has_plan || fail "--plan-id is only supported for rollback."

@@ -21,24 +21,36 @@ inputs and preserves the Host's identity on an exact retry:
 ```sh
 ./install.sh install --mode host --machine my-machine \
   --root "$HOME/virgo" --hub-url https://hub.example/ --account my-account \
-  --network tailscale --advertised-url https://my-machine.example/ \
+  --network local --advertised-url http://127.0.0.1:58612/ --api-port 58612 \
   --enrollment-credential-file "$HOME/private/hub-enrollment-token"
 ```
 
-Update the same Host from a reviewed, current checkout of this canonical bootstrap
-repository. Keep its root, machine and optional `--instance` identity the same:
+The Host example advertises its actual loopback listener. It does not assume
+an additional HTTPS listener or proxy on the Host.
+
+Update from a reviewed, current checkout of this canonical bootstrap repository.
+Keep the existing root, machine and optional `--instance` identity the same, and
+select the installed role explicitly:
 
 ```sh
+./install.sh upgrade --mode local --machine my-hub-machine --root "$HOME/virgo"
 ./install.sh upgrade --mode host --machine my-machine --root "$HOME/virgo"
 ./install.sh rollback --mode host --machine my-machine --root "$HOME/virgo" \
   --plan-id '<plan ID returned by the successful upgrade>'
 ```
 
-Upgrade retains installed Hub, Account, credential and provider configuration;
+Local mode updates the existing local Hub; its instance defaults to `local-hub`.
+Host mode updates the additional Host; its instance defaults to `host`. Supply
+`--instance` when the original installation used another instance name. Upgrade
+requires an explicit `--mode local` or `--mode host`; the legacy default applies
+only to installation. Bootstrap rollback currently exposes the Host plan/cache
+route; local Hub rollback remains an installed-CLI operation.
+
+Host upgrade retains installed Hub, Account, credential and provider configuration;
 those inputs are not accepted again as update flags. Rollback uses the verified
 prior artifact in the installed plan/cache, takes no release/distribution flags,
 and leaves the restored Host stopped. Its returned state is not an activation
-claim. The optional instance defaults to `host`; `--machine` is always required.
+claim. `--machine` is always required.
 
 All options use unique `--name value` pairs. Quote paths containing spaces. The
 wrapper rejects malformed or duplicate options before downloading. It owns

@@ -111,6 +111,16 @@ assert_dispatch upgrade --mode host --release "$release" --github-repository vir
 assert_download; pass
 
 reset_case
+run upgrade --mode local --machine hub
+assert_dispatch upgrade --mode local --release "$release" --github-repository virgo-codes/virgo-release --machine hub
+assert_download; pass
+
+reset_case
+run upgrade --mode local --machine hub --root "$quoted_root" --instance custom-hub
+assert_dispatch upgrade --mode local --release "$release" --github-repository virgo-codes/virgo-release --machine hub --root "$quoted_root" --instance custom-hub
+assert_download; pass
+
+reset_case
 run rollback --mode host --machine remote --plan-id plan-123 --instance second --root "$quoted_root"
 assert_dispatch rollback --mode host --machine remote --plan-id plan-123 --instance second --root "$quoted_root"
 assert_download; pass
@@ -138,6 +148,7 @@ reject_before_download install --machine remote extra-token
 reject_before_download upgrade --machine remote
 reject_before_download upgrade --mode host --machine remote --account account
 reject_before_download rollback --mode host --machine remote
+reject_before_download rollback --mode local --machine hub --plan-id plan-123
 reject_before_download rollback --mode host --machine remote --plan-id first --plan-id second
 reject_before_download install --machine remote --plan-id unexpected
 reject_before_download upgrade --mode host --machine remote --plan-id unexpected
