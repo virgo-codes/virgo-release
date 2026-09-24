@@ -60,12 +60,9 @@ upgrade always receive the exact metadata release and
 `--github-repository virgo-codes/virgo-release`; rollback receives neither pin.
 
 This is `2.0.1`, built from the source commit recorded in `current.json`.
-The metadata currently still pins source `9616ea22a9bda6e36851929d7a3297a64de3f835`.
-Adding these wrapper commands does not publish or select a newer CLI: Host install,
-upgrade and rollback require the release owner to publish an accepted artifact
-containing those commands and advance `current.json`. Until then, the pinned older
-CLI may refuse them. This wrapper never substitutes an unpinned artifact or a
-local source checkout.
+The metadata pins the reviewed integrated source and the immutable release that
+contains the Host install, upgrade and rollback commands documented above. The
+wrapper never substitutes an unpinned artifact or a local source checkout.
 The native launcher is a bundled Bun executable script. It is not a standalone
 Bun-free binary. See the [source README](https://github.com/virgo-codes/virgo) for
 implemented behavior, field evidence, and remaining implementation boundaries.
