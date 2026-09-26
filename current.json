@@ -1,15 +1,15 @@
 {
   "version": "2.0.1",
-  "release": "c6385b10c1b27112fd22f2e68bb28b41228246a01ec32aaae5d782be88fcff48",
-  "sourceCommit": "234376da35c1033ca3f39152a24a4996dc6c9cfb",
-  "sourceTree": "89ac23f799ebe4d4b33c4212542bce1de0dfb455",
+  "release": "819f2f9874d4cfc81f2dffd8a831361d5af17c4460ee0a20d6fb518c7d9a9290",
+  "sourceCommit": "947b05429743434100451fadeb775cd70cd10a56",
+  "sourceTree": "4fb93f70030f68219fd033c05c3e57a810fcce63",
   "platform": {
     "os": "macos",
     "architecture": "arm64"
   },
   "bunVersion": "1.3.14",
-  "archiveSha256": "b147d88b1f9f0e9cf1ab6c9b09d8a872242d98dd89eb177d4a22979494c59bd7",
-  "manifestDigest": "795f60f29abc74a6c1088c2478b9e277c97e763717ad546e69c60a8d7646e4f7",
+  "archiveSha256": "b545ab98dba86b3bd4542830c246bd2e05c6bbf31eab1089d130797db49d7962",
+  "manifestDigest": "47e9add2532ea47bd9106d6b2602582ebc4a6e6fc2e4c7ad55f3cb7138dff055",
   "cliSha256": "194252f41d5a3875d0706ddb671b976099a6e4fd468bf4ae2f0454403942cee0",
   "sourceRepository": "virgo-codes/virgo"
 }
