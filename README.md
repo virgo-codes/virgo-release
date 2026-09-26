@@ -2,11 +2,13 @@
 
 This repository publishes the small, auditable bootstrap for Virgo on macOS arm64.
 
-`current.json` names one immutable GitHub release and the SHA-256 of its `virgo-macos-arm64` CLI asset. `install.sh` requires Bun and an authenticated GitHub CLI, downloads that exact asset, verifies its checksum, and runs it with Bun. A local Hub installation also requires Docker. An additional Host connects to an existing Hub and does not install Hub services.
+`current.json` names one immutable GitHub release and the SHA-256 of its `virgo-macos-arm64` CLI asset. This is a public distribution repository. `install.sh` requires Bun and curl, downloads that exact asset anonymously, verifies its checksum, and runs it with Bun. A local Hub installation also requires Docker. An additional Host connects to an existing Hub and does not install Hub services. Hub enrollment remains separate from downloading public files.
 
 Run it with a machine identifier, for example:
 
 ```sh
+git clone https://github.com/virgo-codes/virgo-release.git
+cd virgo-release
 ./install.sh --machine my-machine
 # Equivalent explicit form:
 ./install.sh install --mode local --machine my-machine
@@ -71,5 +73,5 @@ GitHub tags use `release-<release hash>`; the Virgo release ID itself remains th
 64-character source-content hash. GitHub rejects tags consisting only of such a hash.
 
 Run the isolated bootstrap checks with `bash tests/install.test.sh`. They execute
-the real shell wrapper and Bun with fake GitHub/download fixtures; no network,
+the real shell wrapper and Bun with fake curl/download fixtures; no network,
 Host, Hub, Docker service or credential access is used.

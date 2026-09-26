@@ -65,7 +65,7 @@ fi
 
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || fail "only macOS arm64 is supported."
 command -v bun >/dev/null 2>&1 || fail "Bun must be installed."
-command -v gh >/dev/null 2>&1 || fail "GitHub CLI must be installed."
+command -v curl >/dev/null 2>&1 || fail "curl must be installed."
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 metadata="$script_dir/current.json"
@@ -78,11 +78,10 @@ console.log(value.release); console.log(value.cliSha256);
 release="${current%%$'\n'*}"
 expected_sha="${current#*$'\n'}"
 
-gh auth status >/dev/null 2>&1 || fail "GitHub CLI must be authenticated."
-
 cleanup_dir="$(mktemp -d "${TMPDIR:-/tmp}/virgo-release.XXXXXX")"
-gh release download "release-$release" --repo "$REPOSITORY" --pattern "$ASSET" --dir "$cleanup_dir"
 asset="$cleanup_dir/$ASSET"
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  --output "$asset" "https://github.com/$REPOSITORY/releases/download/release-$release/$ASSET"
 [[ -f "$asset" ]] || fail "release asset was not downloaded."
 actual_sha="$(shasum -a 256 "$asset" | awk '{print $1}')"
 [[ "$actual_sha" == "$expected_sha" ]] || fail "release asset checksum does not match current.json."
