@@ -73,3 +73,12 @@ GitHub tags use `release-<release hash>`; the Virgo release ID itself remains th
 Run the isolated bootstrap checks with `bash tests/install.test.sh`. They execute
 the real shell wrapper and Bun with fake GitHub/download fixtures; no network,
 Host, Hub, Docker service or credential access is used.
+
+Memory is enabled after Hub and Hosts run the same published release. Use the
+verified installed CLI with the source's [Memory capability and native-hook
+instructions](https://github.com/virgo-codes/virgo/blob/main/docs/operations/hub-capability-plans.md).
+Keep existing provider sessions, retain the original installation plan for resume
+or rollback, and verify native capture, search and restoration after activation.
+The bootstrap does not silently enable Memory or replace existing Hub data.
+Passwordless sudo is optional; only a specific privileged machine operation uses
+the operator's normal sudo authorization.
