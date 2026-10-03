@@ -73,3 +73,43 @@ GitHub tags use `release-<release hash>`; the Virgo release ID itself remains th
 Run the isolated bootstrap checks with `bash tests/install.test.sh`. They execute
 the real shell wrapper and Bun with fake GitHub/download fixtures; no network,
 Host, Hub, Docker service or credential access is used.
+
+Memory is enabled after Hub and Hosts run the same published release. Use the
+verified installed CLI with the source's [Memory capability and native-hook
+instructions](https://github.com/virgo-codes/virgo/blob/main/docs/operations/hub-capability-plans.md).
+Keep existing provider sessions, retain the original installation plan for resume
+or rollback, and verify native capture, search and restoration after activation.
+The bootstrap does not silently enable Memory or replace existing Hub data.
+Passwordless sudo is optional; only a specific privileged machine operation uses
+the operator's normal sudo authorization.
+
+The selected release also supports reconnecting an existing Host through the
+installed CLI's `host hub retarget` command, preserving its keypair, native
+sessions and unrelated settings. Use the source's [existing-Host recovery
+instructions](https://github.com/virgo-codes/virgo/blob/main/README.md#installation-root-and-working-data)
+for the scoped enrollment credential, offline stop and retry sequence. Stopped
+managed sessions stay out of automatic claims; a proved-dead owned pane resumes
+its original session. These recovery operations do not migrate unavailable
+historical Hub records or replace provider histories.
+
+For an existing native session on a Memory-enabled Host, the installed CLI's
+`agent add --file` continues the required hook preparation, complete roster
+binding and Host reload before launching the new frontend. Exact retries retain
+the pending continuation, existing provider processes and stopped-session intent.
+This includes a restored Codex profile whose original thread is not yet loaded.
+It still requires the original provider home/thread and the prepared adapter and
+principal configuration. It does not provision a fresh provider thread or replace
+the remaining Seat setup steps. Follow the source's [existing-session
+sequence](https://github.com/virgo-codes/virgo/blob/main/docs/operations/hub-capability-plans.md#add-an-existing-native-session-to-a-memory-enabled-host).
+
+Managed backend lifecycle commands accept Codex's owned socket link layout and
+verify the resolved socket against the recorded daemon. Repeating `backend start`
+after interrupted readiness can reuse that same daemon. Stop cleans only its
+captured endpoint; neither operation creates or resumes a thread.
+
+Teams restoration can retain a module-prepared constrained service-principal
+send grant independently of its complete Conversation destination policy.
+Conversation profiles and grants may be restored before their native recipients
+become active. Restoring configuration is not proof of external chat readiness:
+the runtime owner still verifies the selected connector, public ingress and an
+actual message/reply without replaying historical messages or schedules.
