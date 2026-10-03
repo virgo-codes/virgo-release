@@ -1,115 +1,121 @@
-# Virgo release bootstrap
+# Virgo public command
 
-This repository publishes the small, auditable bootstrap for Virgo on macOS arm64.
+This repository publishes Virgo's official acquisition script and stable `virgo`
+command for macOS Apple Silicon. The command selects a checksum-verified release
+CLI and delegates installation and runtime operations to that existing CLI.
 
-`current.json` names one immutable GitHub release and the SHA-256 of its `virgo-macos-arm64` CLI asset. `install.sh` requires Bun and curl, downloads that exact public asset over HTTPS without GitHub login, verifies its checksum, and runs it with Bun. A local Hub installation also requires Docker. An additional Host connects to an existing Hub and does not install Hub services. Hub enrollment and provider login remain separate from downloading Virgo.
-
-Run it with a machine identifier, for example:
+Acquire the command once:
 
 ```sh
-./install.sh --machine my-machine
-# Equivalent explicit form:
-./install.sh install --mode local --machine my-machine
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://raw.githubusercontent.com/virgo-codes/virgo-release/main/install.sh | bash
 ```
 
-The default installation root is `~/virgo`. Pass `--root /absolute/path` to choose another root. The bootstrap does not configure a Hub, Host, adapter, credential, hook, or provider itself; the verified common CLI owns those steps.
-
-To install an additional Host, use the existing Hub's address, Account and an
-independently prepared enrollment-credential file. The common CLI validates these
-inputs and preserves the Host's identity on an exact retry:
+Open a new terminal, then use `virgo`:
 
 ```sh
-./install.sh install --mode host --machine my-machine \
-  --root "$HOME/virgo" --hub-url https://hub.example/ --account my-account \
+virgo --help
+virgo install --mode local --machine my-machine --root "$HOME/virgo"
+```
+
+Acquisition creates `~/.local/bin/virgo`, supplies its private checksum-pinned
+Bun 1.3.14 runtime, verifies the selected CLI, and adds the command directory to
+the ordinary login profile (`.zprofile` for zsh, `.bash_profile` for Bash).
+It preserves existing profile content and adds the path once. You do not need a
+repository checkout, a separately installed Bun, a CLI alias, or receipt decoding.
+Public artifact downloads do not require GitHub login. Docker is needed for a
+local Hub's services. Hub enrollment, provider login and normal OS/provider
+consent remain separate from command acquisition.
+
+`current.json` pins the source commit/tree, exact release and the SHA-256 of
+`virgo-macos-arm64`. It also pins the launcher code. The acquisition script pins
+the official Bun archive and executable. Downloads use HTTPS and verify before
+replacing the stable command. Repeat acquisition after an interrupted setup or
+to obtain published launcher changes; a failed download or checksum leaves the
+prior command usable. Acquisition does not change a Hub, Host or provider.
+
+Install an additional Host using the existing Hub's address, Account and scoped
+enrollment-credential file:
+
+```sh
+virgo install --mode host --machine my-host --root "$HOME/virgo" \
+  --hub-url https://hub.example/ --account my-account \
   --network local --advertised-url http://127.0.0.1:58612/ --api-port 58612 \
   --enrollment-credential-file "$HOME/private/hub-enrollment-token"
 ```
 
-The Host example advertises its actual loopback listener. It does not assume
-an additional HTTPS listener or proxy on the Host.
+The Host's example listener is loopback. It does not assume an extra proxy or
+HTTPS listener. The common CLI owns validation, identity, receipts and exact
+retry. Preserve the returned installation directory and plan receipts.
 
-Update from a reviewed, current checkout of this canonical bootstrap repository.
-Keep the existing root, machine and optional `--instance` identity the same, and
-select the installed role explicitly:
+Install and upgrade select the verified official current release automatically.
+Keep the root, machine, installed role and any custom instance identity:
 
 ```sh
-./install.sh upgrade --mode local --machine my-hub-machine --root "$HOME/virgo"
-./install.sh upgrade --mode host --machine my-machine --root "$HOME/virgo"
-./install.sh rollback --mode host --machine my-machine --root "$HOME/virgo" \
-  --plan-id '<plan ID returned by the successful upgrade>'
+virgo upgrade --mode local --machine my-machine --root "$HOME/virgo"
+virgo upgrade --mode host --machine my-host --root "$HOME/virgo"
 ```
 
-Local mode updates the existing local Hub; its instance defaults to `local-hub`.
-Host mode updates the additional Host; its instance defaults to `host`. Supply
-`--instance` when the original installation used another instance name. Upgrade
-requires an explicit `--mode local` or `--mode host`; the legacy default applies
-only to installation. Bootstrap rollback currently exposes the Host plan/cache
-route; local Hub rollback remains an installed-CLI operation.
+Use `--instance` if the original installation chose another instance name.
+The root defaults to `~/virgo`; the instance defaults to `local-hub` in local
+mode and `host` in Host mode. Install retains its legacy local-mode default;
+upgrade and rollback require explicit `--mode local` or `--mode host`.
 
-Host upgrade retains installed Hub, Account, credential and provider configuration;
-those inputs are not accepted again as update flags. Rollback uses the verified
-prior artifact in the installed plan/cache, takes no release/distribution flags,
-and leaves the restored Host stopped. Its returned state is not an activation
-claim. `--machine` is always required.
+For an installed operation, select its actual installation directory:
 
-All options use unique `--name value` pairs. Quote paths containing spaces. The
-wrapper rejects malformed or duplicate options before downloading. It owns
-`--mode` and forbids caller-supplied `--release`, `--github-repository`,
-`--manifest-directory` and `--bundle`, including `--name=value` forms. Install and
-upgrade always receive the exact metadata release and
-`--github-repository virgo-codes/virgo-release`; rollback receives neither pin.
+```sh
+virgo --directory /absolute/installation-directory host status
+virgo --directory /absolute/installation-directory agent status vsp:/account:space/repo/lead
+virgo --directory /absolute/installation-directory native-session status
+```
 
-This is `2.0.1`, built from the source commit recorded in `current.json`.
-The metadata pins the reviewed integrated source and the immutable release that
-contains the Host install, upgrade and rollback commands documented above. The
-wrapper never substitutes an unpinned artifact or a local source checkout.
-The native launcher is a bundled Bun executable script. It is not a standalone
-Bun-free binary. See the [source README](https://github.com/virgo-codes/virgo) for
-implemented behavior, field evidence, and remaining implementation boundaries.
+The launcher reads that instance's existing active-release receipt, verifies the
+cached archive checksum and its installed CLI/descriptor bytes, then passes the
+arguments unchanged to its installed `bin/virgo`. It does not fetch or substitute
+a newer CLI for an older target, or edit its configuration or state. A root with
+one instance can also select the existing CLI's root-aware operator commands;
+use the exact instance directory for ordinary client commands.
 
-GitHub tags use `release-<release hash>`; the Virgo release ID itself remains the
-64-character source-content hash. GitHub rejects tags consisting only of such a hash.
+Host rollback uses its retained plan and already verified distribution cache:
 
-Run the isolated bootstrap checks with `bash tests/install.test.sh`. They execute
-the real shell wrapper and Bun with fake GitHub/download fixtures; no network,
-Host, Hub, Docker service or credential access is used.
+```sh
+virgo rollback --mode host --machine my-host --root "$HOME/virgo" \
+  --plan-id '<plan ID from the successful upgrade>'
+```
 
-Memory is enabled after Hub and Hosts run the same published release. Use the
-verified installed CLI with the source's [Memory capability and native-hook
-instructions](https://github.com/virgo-codes/virgo/blob/main/docs/operations/hub-capability-plans.md).
-Keep existing provider sessions, retain the original installation plan for resume
-or rollback, and verify native capture, search and restoration after activation.
-The bootstrap does not silently enable Memory or replace existing Hub data.
-Passwordless sudo is optional; only a specific privileged machine operation uses
-the operator's normal sudo authorization.
+Local Hub rollback preserves the existing CLI's retained-distribution contract:
 
-The selected release also supports reconnecting an existing Host through the
-installed CLI's `host hub retarget` command, preserving its keypair, native
-sessions and unrelated settings. Use the source's [existing-Host recovery
-instructions](https://github.com/virgo-codes/virgo/blob/main/README.md#installation-root-and-working-data)
-for the scoped enrollment credential, offline stop and retry sequence. Stopped
-managed sessions stay out of automatic claims; a proved-dead owned pane resumes
-its original session. These recovery operations do not migrate unavailable
-historical Hub records or replace provider histories.
+```sh
+virgo rollback --mode local --machine my-machine --root "$HOME/virgo" \
+  --plan-id '<plan ID from the successful upgrade>' \
+  --manifest-directory /absolute/retained-manifest-directory
+```
 
-For an existing native session on a Memory-enabled Host, the installed CLI's
-`agent add --file` continues the required hook preparation, complete roster
-binding and Host reload before launching the new frontend. Exact retries retain
-the pending continuation, existing provider processes and stopped-session intent.
-This includes a restored Codex profile whose original thread is not yet loaded.
-It still requires the original provider home/thread and the prepared adapter and
-principal configuration. It does not provision a fresh provider thread or replace
-the remaining Seat setup steps. Follow the source's [existing-session
-sequence](https://github.com/virgo-codes/virgo/blob/main/docs/operations/hub-capability-plans.md#add-an-existing-native-session-to-a-memory-enabled-host).
+It may instead use the retained `--github-repository owner/repo`. Host rollback
+receives no release/distribution injection and leaves the restored Host stopped;
+its receipt is not an activation claim. The launcher delegates rollback to the
+selected installed CLI and does not implement its own lifecycle.
 
-Managed backend lifecycle commands accept Codex's owned socket link layout and
-verify the resolved socket against the recorded daemon. Repeating `backend start`
-after interrupted readiness can reuse that same daemon. Stop cleans only its
-captured endpoint; neither operation creates or resumes a thread.
+An explicit recovery selection remains supported. Supplying `--release` together
+with exactly one of `--github-repository`, `--manifest-directory` or `--bundle`
+preserves both values and suppresses current-release injection. The existing CLI
+validates the selected distribution and the role's supported options; `--bundle`
+is the Host CLI's existing verified preview-bundle path. An incomplete explicit
+selection is rejected before download. Quote each path; options use unique
+`--name value` pairs and preserve argument boundaries.
 
-Teams restoration can retain a module-prepared constrained service-principal
-send grant independently of its complete Conversation destination policy.
-Conversation profiles and grants may be restored before their native recipients
-become active. Restoring configuration is not proof of external chat readiness:
-the runtime owner still verifies the selected connector, public ingress and an
-actual message/reply without replaying historical messages or schedules.
+The selected runtime is Virgo `2.0.1`, built from the source identity in
+`current.json`. GitHub tags are `release-<release hash>`; Virgo's release ID is
+the 64-character source-content hash. The underlying CLI remains a bundled Bun
+script; the supplied private runtime keeps that implementation detail inside the
+public command.
+
+Run `bash tests/install.test.sh` for the composed isolated acquisition, login
+profile/PATH, install/upgrade selection, recovery, older installed-target dispatch,
+checksum/download failure and retry checks. They use real Bash, zsh and Bun with
+isolated HTTPS fixtures and perform no live Hub, Host, Docker, provider or
+credential operation. Separate real published-archive installed-path evidence is
+recorded in the D2 delivery receipt; source publication does not roll out a fleet.
+
+Follow the canonical [Virgo documentation](https://github.com/virgo-codes/virgo)
+for supported setup, authorization, recovery and operational verification.
