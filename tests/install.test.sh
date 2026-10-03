@@ -9,7 +9,7 @@ fixture="$test_root/bootstrap path with spaces"
 mkdir -p "$fixture" "$test_root/fake bin" "$test_root/downloads with spaces"
 cp "$repository/install.sh" "$fixture/install.sh"
 export TMPDIR="$test_root/downloads with spaces"
-export VIRGO_BOOTSTRAP_TEST_GH_LOG="$test_root/gh.jsonl"
+export VIRGO_BOOTSTRAP_TEST_DOWNLOAD_LOG="$test_root/curl.jsonl"
 export VIRGO_BOOTSTRAP_TEST_DISPATCH="$test_root/dispatched.json"
 export VIRGO_BOOTSTRAP_TEST_ASSET="$test_root/fixture asset"
 export VIRGO_BOOTSTRAP_TEST_BEHAVIOR="ok"
@@ -23,33 +23,28 @@ await Bun.write(process.env.VIRGO_BOOTSTRAP_TEST_DISPATCH, JSON.stringify(proces
 process.exit(Number(process.env.VIRGO_BOOTSTRAP_TEST_EXIT_CODE));
 ASSET
 chmod 600 "$VIRGO_BOOTSTRAP_TEST_ASSET"
+# Any accidental dependency on GitHub CLI or its credentials must fail this suite.
 cat > "$test_root/fake bin/gh" <<'GH'
 #!/usr/bin/env bash
-set -euo pipefail
-"$VIRGO_BOOTSTRAP_TEST_BUN" -e 'require("node:fs").appendFileSync(process.env.VIRGO_BOOTSTRAP_TEST_GH_LOG, JSON.stringify(process.argv.slice(1))+"\n");' "$@"
-if [[ "$1 $2" == "auth status" ]]; then
-  [[ "$VIRGO_BOOTSTRAP_TEST_BEHAVIOR" != "auth-fail" ]]
-  exit
-fi
-[[ "$1 $2" == "release download" ]] || exit 91
-[[ "$VIRGO_BOOTSTRAP_TEST_BEHAVIOR" != "download-fail" ]] || exit 23
-shift 3
-destination=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in --dir) destination="$2" ;; --repo|--pattern) ;; *) exit 92 ;; esac
-  shift 2
-done
-[[ -n "$destination" ]] || exit 93
-cp "$VIRGO_BOOTSTRAP_TEST_ASSET" "$destination/virgo-macos-arm64"
-if [[ "$VIRGO_BOOTSTRAP_TEST_BEHAVIOR" == "tamper" ]]; then
-  printf '%s\n' '// changed after metadata was pinned' >> "$destination/virgo-macos-arm64"
-fi
+exit 91
 GH
+cat > "$test_root/fake bin/curl" <<'CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+"$VIRGO_BOOTSTRAP_TEST_BUN" -e 'require("node:fs").appendFileSync(process.env.VIRGO_BOOTSTRAP_TEST_DOWNLOAD_LOG, JSON.stringify(process.argv.slice(1))+"\n");' -- "$@"
+[[ "$VIRGO_BOOTSTRAP_TEST_BEHAVIOR" != "download-fail" ]] || exit 23
+destination="${!#}"
+[[ "${@: -2:1}" == "--output" && -n "$destination" ]] || exit 93
+cp "$VIRGO_BOOTSTRAP_TEST_ASSET" "$destination"
+if [[ "$VIRGO_BOOTSTRAP_TEST_BEHAVIOR" == "tamper" ]]; then
+  printf '%s\n' '// changed after metadata was pinned' >> "$destination"
+fi
+CURL
 cat > "$test_root/fake bin/uname" <<'UNAME'
 #!/usr/bin/env bash
 case "$1" in -s) printf 'Darwin\n' ;; -m) printf 'arm64\n' ;; *) exit 94 ;; esac
 UNAME
-chmod 700 "$test_root/fake bin/gh" "$test_root/fake bin/uname"
+chmod 700 "$test_root/fake bin/gh" "$test_root/fake bin/curl" "$test_root/fake bin/uname"
 export PATH="$test_root/fake bin:$PATH"
 
 "$VIRGO_BOOTSTRAP_TEST_BUN" -e '
@@ -61,7 +56,7 @@ release="$("$VIRGO_BOOTSTRAP_TEST_BUN" -e 'console.log((await Bun.file(process.a
 passed=0
 reset_case() {
   cp "$test_root/valid-current.json" "$fixture/current.json"
-  rm -f "$VIRGO_BOOTSTRAP_TEST_GH_LOG" "$VIRGO_BOOTSTRAP_TEST_DISPATCH"
+  rm -f "$VIRGO_BOOTSTRAP_TEST_DOWNLOAD_LOG" "$VIRGO_BOOTSTRAP_TEST_DISPATCH"
   export VIRGO_BOOTSTRAP_TEST_BEHAVIOR="ok" VIRGO_BOOTSTRAP_TEST_EXIT_CODE="0"
 }
 run() { (cd "$fixture"; bash "$fixture/install.sh" "$@") > "$test_root/stdout" 2> "$test_root/stderr"; }
@@ -75,17 +70,17 @@ if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error(JSON.string
 }
 assert_download() {
   "$VIRGO_BOOTSTRAP_TEST_BUN" -e '
-const calls=(await Bun.file(process.env.VIRGO_BOOTSTRAP_TEST_GH_LOG).text()).trim().split("\n").map(x=>JSON.parse(x));
-if(JSON.stringify(calls[0])!==JSON.stringify(["auth","status"])||calls.length!==2)throw new Error("Expected only authentication and one download");
-const args=calls[1];const expected=["release","download","release-"+process.argv[1],"--repo","virgo-codes/virgo-release","--pattern","virgo-macos-arm64","--dir"];
-if(JSON.stringify(args.slice(0,8))!==JSON.stringify(expected)||args.length!==9)throw new Error("Unpinned download arguments");
-if(require("node:fs").existsSync(args[8]))throw new Error("Temporary download was not cleaned");
+const calls=(await Bun.file(process.env.VIRGO_BOOTSTRAP_TEST_DOWNLOAD_LOG).text()).trim().split("\n").map(x=>JSON.parse(x));
+if(calls.length!==1)throw new Error("Expected one anonymous download and no credential probe");
+const args=calls[0];const expected=["-q","--fail","--location","--silent","--show-error","--proto","=https","--proto-redir","=https","https://github.com/virgo-codes/virgo-release/releases/download/release-"+process.argv[1]+"/virgo-macos-arm64","--output"];
+if(JSON.stringify(args.slice(0,11))!==JSON.stringify(expected)||args.length!==12)throw new Error("Unpinned or non-HTTPS download arguments");
+if(require("node:fs").existsSync(require("node:path").dirname(args[11])))throw new Error("Temporary download was not cleaned");
 ' "$release"
 }
 reject_before_download() {
   reset_case
   if run "$@"; then printf 'Unexpected acceptance: %s\n' "$*" >&2; exit 1; fi
-  [[ ! -e "$VIRGO_BOOTSTRAP_TEST_GH_LOG" && ! -e "$VIRGO_BOOTSTRAP_TEST_DISPATCH" ]]
+  [[ ! -e "$VIRGO_BOOTSTRAP_TEST_DOWNLOAD_LOG" && ! -e "$VIRGO_BOOTSTRAP_TEST_DISPATCH" ]]
   pass
 }
 
@@ -158,18 +153,18 @@ for malformed in 'null' '{"release":"not-an-id"}' '{not-json'; do
   reset_case
   printf '%s\n' "$malformed" > "$fixture/current.json"
   if run --machine legacy; then exit 1; fi
-  [[ ! -e "$VIRGO_BOOTSTRAP_TEST_GH_LOG" && ! -e "$VIRGO_BOOTSTRAP_TEST_DISPATCH" ]]; pass
+  [[ ! -e "$VIRGO_BOOTSTRAP_TEST_DOWNLOAD_LOG" && ! -e "$VIRGO_BOOTSTRAP_TEST_DISPATCH" ]]; pass
 done
 reset_case
 export VIRGO_BOOTSTRAP_TEST_BEHAVIOR=tamper
 if run install --mode host --machine remote; then exit 1; fi
 [[ ! -e "$VIRGO_BOOTSTRAP_TEST_DISPATCH" ]]; assert_download; pass
 
+# All successful cases run with an unusable gh executable and no auth call.
 reset_case
-export VIRGO_BOOTSTRAP_TEST_BEHAVIOR=auth-fail
-if run --machine legacy; then exit 1; fi
-[[ ! -e "$VIRGO_BOOTSTRAP_TEST_DISPATCH" ]]
-[[ "$(wc -l < "$VIRGO_BOOTSTRAP_TEST_GH_LOG" | tr -d ' ')" == 1 ]]; pass
+run --machine no-github-login
+assert_dispatch install --mode local --release "$release" --github-repository virgo-codes/virgo-release --machine no-github-login
+assert_download; pass
 
 reset_case
 export VIRGO_BOOTSTRAP_TEST_BEHAVIOR=download-fail
@@ -182,4 +177,4 @@ status=0
 run upgrade --mode host --machine remote || status=$?
 [[ "$status" == 7 ]]; assert_download; pass
 
-printf 'PASS: %s isolated shell cases (real Bash/Bun, fake gh/asset, no live effects).\n' "$passed"
+printf 'PASS: %s isolated shell cases (real Bash/Bun, fake curl/asset, unusable gh, no live effects).\n' "$passed"
