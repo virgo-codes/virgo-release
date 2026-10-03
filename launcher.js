@@ -120,7 +120,7 @@ async function installedCLI(requested) {
   }
   const descriptor = await json(join(active.releaseDirectory, 'release.json'));
   if (descriptor.release !== state.installedRelease) fail('Installed descriptor names a different release.');
-  return cli;
+  return { path: cli, root, directory: selected, target, config };
 }
 function parseOptions(args) {
   const flags = new Map();
@@ -133,6 +133,25 @@ function parseOptions(args) {
   if (flags.has('--root') && !isAbsolute(flags.get('--root'))) fail('--root must be absolute.');
   return flags;
 }
+function rootCommandArgs(argv, selected) {
+  if (argv[0] === 'skill') {
+    if (argv[1] === 'install') {
+      const rootIndex = argv.indexOf('--root');
+      const root = rootIndex === -1 ? join(homedir(), 'virgo') : argv[rootIndex + 1];
+      if (!root || !isAbsolute(root) || resolve(root) !== selected.root)
+        fail('Skill installation root differs from --directory; pass --root for the selected installation.');
+    }
+    return argv;
+  }
+  const flags = parseOptions(argv.slice(1));
+  const mode = flags.get('--mode');
+  const installedMode = ['host', 'remote_host'].includes(selected.config.mode) ? 'host' : 'local';
+  const root = resolve(flags.get('--root') ?? join(homedir(), 'virgo'));
+  const instance = flags.get('--instance') ?? (mode === 'host' ? 'host' : 'local-hub');
+  if (mode !== installedMode || root !== selected.root || flags.get('--machine') !== selected.target.machine || instance !== selected.target.instance)
+    fail('Setup mode/root/machine/instance differs from --directory; use the selected installation target.');
+  return argv;
+}
 async function main(argv) {
   if (argv[0] === '--bootstrap-cache' && argv.length === 2) { await currentCLI(argv[1]); return 0; }
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]))) {
@@ -141,7 +160,11 @@ async function main(argv) {
   }
   if (argv[0] === '--directory') {
     if (!argv[1] || !isAbsolute(argv[1])) fail('--directory requires an absolute installation path.');
-    return run(process.execPath, [await installedCLI(argv[1]), ...argv]);
+    const selected = await installedCLI(argv[1]);
+    const command = argv.slice(2);
+    const rootCommand = ['skill', 'knowledge-setup', 'capability-setup'].includes(command[0]);
+    const args = rootCommand ? rootCommandArgs(command, selected) : argv;
+    return run(process.execPath, [selected.path, ...args]);
   }
   if (!['install', 'upgrade', 'rollback'].includes(argv[0])) fail('Use --directory ABS for an installed command.');
   const flags = parseOptions(argv.slice(1));
@@ -158,7 +181,7 @@ async function main(argv) {
     const root = resolve(flags.get('--root') ?? join(homedir(), 'virgo'));
     const instance = flags.get('--instance') ?? (mode === 'host' ? 'host' : 'local-hub');
     const directory = join(root, 'instances', encodeURIComponent(`${flags.get('--machine')}\0agent_host\0${instance}`));
-    return run(process.execPath, [await installedCLI(directory), ...args]);
+    return run(process.execPath, [(await installedCLI(directory)).path, ...args]);
   }
   if (flags.has('--plan-id')) fail('--plan-id is only supported for rollback.');
   if ((flags.has('--release') || distributions.length) && (!flags.has('--release') || distributions.length !== 1))

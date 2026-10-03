@@ -76,6 +76,31 @@ a newer CLI for an older target, or edit its configuration or state. A root with
 one instance can also select the existing CLI's root-aware operator commands;
 use the exact instance directory for ordinary client commands.
 
+Three existing product commands run before the product's client selector. Select
+their verified installed CLI with the stable command, which consumes only the
+`--directory` selector for these routes:
+
+```sh
+virgo --directory /absolute/installation-directory skill list
+virgo --directory /absolute/installation-directory skill install --root "$HOME/virgo"
+virgo --directory /absolute/host-installation-directory knowledge-setup \
+  --mode host --root "$HOME/virgo" --machine my-host --repository space/repo \
+  --github-repository virgo-codes/virgo-release
+virgo --directory /absolute/host-installation-directory capability-setup \
+  --mode host --root "$HOME/virgo" --machine my-host \
+  --selection /absolute/private-selection-file \
+  --github-repository virgo-codes/virgo-release
+```
+
+Setup mode/root/machine/instance must match the selected installation. A custom
+instance requires its original `--instance`. Host setup verifies one distribution
+for the already installed release; it does not inject current. Local setup and
+Host capability-plan recovery use the exact `--plan-id` and no distribution.
+The existing product parser owns those options and plan/lifecycle behavior.
+Skill installation accepts an optional skill name and root; its effective root
+must be the selected installation root. It receives no mode/machine/instance
+flags. Skill listing and setup routing do not fetch the newest CLI.
+
 Host rollback uses its retained plan and already verified distribution cache:
 
 ```sh

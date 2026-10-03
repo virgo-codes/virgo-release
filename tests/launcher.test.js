@@ -64,7 +64,7 @@ async function installedFixture(installationRoot, release, marker, instance = 'h
   await mkdir(directory, { recursive: true, mode: 0o700 }); await mkdir(join(releaseDirectory, 'bin'), { recursive: true }); await mkdir(dirname(handle), { recursive: true });
   await writeFile(join(releaseDirectory, 'bin', 'virgo'), cliBytes, { mode: 0o555 }); await writeFile(join(releaseDirectory, 'release.json'), descriptor, { mode: 0o444 });
   await writeFile(handle, archiveBytes, { mode: 0o600 });
-  await writeFile(join(directory, 'virgo.config.json'), JSON.stringify({ schemaVersion: 1, machine: target.machine, release }), { mode: 0o600 });
+  await writeFile(join(directory, 'virgo.config.json'), JSON.stringify({ schemaVersion: 1, machine: target.machine, release, mode: instance === 'local-hub' ? 'local' : 'host' }), { mode: 0o600 });
   await writeFile(join(directory, 'installation-state.json'), JSON.stringify({ schemaVersion: 1, target, installedRelease: release,
     active: { releaseDirectory, artifact: { handle, artifact: { component: 'agent_host', release, platform: archive.platform, format: 'native_archive', digest } } } }), { mode: 0o600 });
   return { directory, releaseDirectory, handle };
@@ -105,9 +105,29 @@ try {
   await rm(downloadLog, { force: true });
   success(command(virgo, installedArgs, { ...env, VIRGO_TEST_FAIL: 'current.json' })); await dispatch('old', installedArgs);
   try { await readFile(downloadLog); throw new Error('Installed dispatch unexpectedly contacted current metadata.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const selectedRoot = join(root, 'old installed root');
+  for (const args of [ ['skill','list'], ['skill','install','--root',selectedRoot], ['skill','install','virgo-task','--root',selectedRoot],
+    ['knowledge-setup','--mode','host','--root',selectedRoot,'--machine','isolated','--repository','space/repo','--manifest-directory',join(selectedRoot,'cache')],
+    ['capability-setup','--mode','host','--root',selectedRoot,'--machine','isolated','--selection',join(root,'selection with spaces'),'--provider-hooks',join(root,'hooks with spaces'),'--github-repository','virgo-codes/virgo-release'],
+    ['capability-setup','--mode','host','--root',selectedRoot,'--machine','isolated','--plan-id','retained-plan'] ]) {
+    success(command(virgo, ['--directory',target.directory,...args], { ...env, VIRGO_TEST_FAIL: 'current.json' })); await dispatch('old', args);
+  }
+  for (const args of [ ['skill','install','--root',join(root,'another root')], ['skill','install'],
+    ['knowledge-setup','--mode','host','--root',selectedRoot,'--machine','other','--repository','space/repo','--manifest-directory',join(selectedRoot,'cache')],
+    ['capability-setup','--mode','host','--root',join(root,'another root'),'--machine','isolated','--plan-id','retained-plan'],
+    ['capability-setup','--mode','host','--root',selectedRoot,'--machine','isolated','--instance','other','--plan-id','retained-plan'],
+    ['capability-setup','--mode','local','--root',selectedRoot,'--machine','isolated','--plan-id','retained-plan'] ]) {
+    await rm(dispatchLog, { force:true }); rejected(command(virgo, ['--directory',target.directory,...args],env),'differs');
+    try { await readFile(dispatchLog); throw new Error('Target mismatch reached the installed CLI.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
   const hostRollback = ['rollback', '--mode', 'host', '--machine', 'isolated', '--root', join(root, 'old installed root'), '--plan-id', 'retained-plan'];
   success(command(virgo, hostRollback, env)); await dispatch('old', hostRollback);
   const localRoot = join(root, 'local retained root'); await installedFixture(localRoot, older, 'old-local', 'local-hub');
+  const localDirectory = join(localRoot,'instances',encodeURIComponent('isolated\0agent_host\0local-hub'));
+  for (const setup of ['knowledge-setup','capability-setup']) {
+    const args=[setup,'--mode','local','--root',localRoot,'--machine','isolated','--plan-id','retained-plan'];
+    success(command(virgo,['--directory',localDirectory,...args],env)); await dispatch('old-local',args);
+  }
   const localRollback = ['rollback', '--mode', 'local', '--machine', 'isolated', '--root', localRoot, '--plan-id', 'retained-plan', '--manifest-directory', join(localRoot, 'cache')];
   success(command(virgo, localRollback, env)); await dispatch('old-local', localRollback);
   const beforeState = await readFile(join(target.directory, 'installation-state.json'));
