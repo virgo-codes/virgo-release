@@ -82,3 +82,12 @@ or rollback, and verify native capture, search and restoration after activation.
 The bootstrap does not silently enable Memory or replace existing Hub data.
 Passwordless sudo is optional; only a specific privileged machine operation uses
 the operator's normal sudo authorization.
+
+The selected release also supports reconnecting an existing Host through the
+installed CLI's `host hub retarget` command, preserving its keypair, native
+sessions and unrelated settings. Use the source's [existing-Host recovery
+instructions](https://github.com/virgo-codes/virgo/blob/main/README.md#installation-root-and-working-data)
+for the scoped enrollment credential, offline stop and retry sequence. Stopped
+managed sessions stay out of automatic claims; a proved-dead owned pane resumes
+its original session. These recovery operations do not migrate unavailable
+historical Hub records or replace provider histories.
