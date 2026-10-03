@@ -11,5 +11,6 @@
   "archiveSha256": "ab0ff99671095ae51e4e796ddedb3fc8783a0295c02228201cb84e3a31aa3640",
   "manifestDigest": "f07bfdf085e97a15fc373fc6870ef223b8fa992e5e7336e0eec1ac01daf49639",
   "cliSha256": "3e25ce624049da6993f97de1d216a26665f2b6cd5f7342aa4bd02834c6a32576",
-  "sourceRepository": "virgo-codes/virgo"
+  "sourceRepository": "virgo-codes/virgo",
+  "launcherSha256": "fa083c445a37070213797085549a16f52059dd94b04b9b9922a97f7694d49dc2"
 }
