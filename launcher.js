@@ -145,9 +145,17 @@ async function verifiedReleaseCLI(releaseDirectory, handle, archiveDigest, relea
   return { path: cli, descriptor, digest: entry('bin/virgo').digest };
 }
 /** Verify the existing registration, then use only the official configured runtime. */
-async function installedExecutable(selected, migration = false) {
+async function installedExecutable(selected, migration = false, planId) {
   const registration = join(selected.root, 'processes', 'supervision', 'registration');
   await directory(registration);
+  let pending;
+  try { pending = await json(join(registration, 'runtime-transition.json'), 8192, true); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (pending) {
+    if (Object.keys(pending).length !== 1 || !HASH.test(pending.planId)) fail('Interpreter transition marker is invalid; preserve its original plan before recovery.');
+    if (!migration || planId !== pending.planId)
+      fail(`Interpreter migration is pending; resume virgo --directory ${JSON.stringify(selected.directory)} host runtime apply --plan-id ${pending.planId} before other commands.`);
+  }
   const receipt = await json(join(registration, 'supervisor.json'), 1024 * 1024, true);
   const verify = async pin => {
     if (pin.schemaVersion !== 1 || pin.root !== selected.root || pin.launchAgentsDirectory !== join(homedir(), 'Library', 'LaunchAgents') ||
@@ -240,7 +248,7 @@ async function main(argv) {
     if (migration && !((command.length === 3 && command[2] === 'prepare') || (command.length === 5 && command[2] === 'apply' && command[3] === '--plan-id' && HASH.test(command[4])))) fail('Use host runtime prepare or host runtime apply --plan-id <returned ID>.');
     const rootCommand = ['skill', 'knowledge-setup', 'capability-setup'].includes(command[0]);
     const args = rootCommand ? rootCommandArgs(command, selected) : argv;
-    const executable = await installedExecutable(selected, migration);
+    const executable = await installedExecutable(selected, migration, migration && command[2] === 'apply' ? command[4] : undefined);
     const cli = migration ? (await currentCLI(undefined, true)).path : selected.path;
     return run(executable, [cli, ...args]);
   }

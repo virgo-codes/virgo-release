@@ -147,6 +147,11 @@ try {
   const originalLauncher = join(root, 'published-7441-launcher.js');
   const old = spawnSync('git', ['show', '7441a5ef39489b3e3aedf16e3b60bc4433b197c2:launcher.js'], { cwd: repository });
   if (old.status !== 0) throw new Error('Missing exact published negative control.');
+  const pendingNegative = join(root, 'bb1-pending-negative.js');
+  const bb1 = spawnSync('git', ['show', 'bb1e2d68d2b04a997efc2695272ce8755e7dee2d:launcher.js'], { cwd: repository, encoding: 'utf8' });
+  if (bb1.status !== 0) throw new Error('Missing exact reviewed pending negative control.');
+  await writeFile(pendingNegative, bb1.stdout.replace(/const BUN_SHA = '[a-f0-9]+';/u, `const BUN_SHA = '${sha(await readFile(process.execPath))}';`));
+
   await writeFile(originalLauncher, old.stdout);
   for (const [installed, installationRoot, mode] of [[target, selectedRoot, 'host'],
       [await installedFixture(join(root, 'supervised local'), older, 'local-pin', 'local-hub'), join(root, 'supervised local'), 'local']]) {
@@ -164,6 +169,37 @@ try {
       await dispatch(['install','upgrade'].includes(args[0])?'current':mode==='host'?'old':'local-pin',
         ['install','upgrade'].includes(args[0])?[...args,'--release',newer,'--github-repository','virgo-codes/virgo-release']:args);
     }
+    // The after receipt is already configured, but a response loss may leave the
+    // product-owned marker. Even an old installed CLI must not bypass that marker.
+    const transition = join(dirname(installed.receiptPath), 'runtime-transition.json');
+    const planId = 'd'.repeat(64);
+    await writeFile(transition, JSON.stringify({ planId }), { mode: 0o600 });
+    success(command(installed.executable, [pendingNegative, ...operations[0]], pinnedEnv));
+    await dispatch(mode === 'host' ? 'old' : 'local-pin', operations[0]);
+
+    for (const args of [...operations, ['--directory', installed.directory, 'host', 'stop'],
+        ['--directory', installed.directory, 'host', 'runtime', 'prepare'],
+        ['--directory', installed.directory, 'host', 'runtime', 'apply', '--plan-id', 'e'.repeat(64)]]) {
+      await rm(dispatchLog, { force: true }); await rm(downloadLog, { force: true });
+      rejected(command(virgo, args, pinnedEnv), 'migration is pending');
+      for (const path of [dispatchLog, downloadLog]) try { await readFile(path); throw new Error('Pending migration reached ordinary dispatch/download.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    const apply = ['--directory', installed.directory, 'host', 'runtime', 'apply', '--plan-id', planId];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      success(command(virgo, apply, pinnedEnv)); await dispatch('current', apply);
+      if (JSON.parse(await readFile(transition)).planId !== planId) throw new Error('Launcher changed product-owned migration marker.');
+    }
+    // Product owns cleanup; once it clears its marker ordinary dispatch resumes.
+    await rm(transition); success(command(virgo, operations[0], pinnedEnv));
+    for (const invalid of [{ planId: 'invalid' }, { planId, extra: true }]) {
+      await writeFile(transition, JSON.stringify(invalid), { mode: 0o600 });
+      await rm(dispatchLog, { force: true }); rejected(command(virgo, apply, pinnedEnv), 'marker is invalid');
+      try { await readFile(dispatchLog); throw new Error('Invalid marker reached operator.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    await rm(transition); await symlink(installed.receiptPath, transition);
+    await rm(dispatchLog, { force: true }); rejected(command(virgo, apply, pinnedEnv));
+    try { await readFile(dispatchLog); throw new Error('Symlink marker reached operator.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    await rm(transition);
     const before = await readFile(installed.receiptPath);
     const refuse = async () => {
       for (const args of [operations[0],operations[2],operations[3],operations[4]]) {

@@ -12,7 +12,7 @@
   "manifestDigest": "f07bfdf085e97a15fc373fc6870ef223b8fa992e5e7336e0eec1ac01daf49639",
   "cliSha256": "3e25ce624049da6993f97de1d216a26665f2b6cd5f7342aa4bd02834c6a32576",
   "sourceRepository": "virgo-codes/virgo",
-  "launcherSha256": "edb0a912dbfa5dca9b660369c550d3f22d8c7d5a875f5586a0c26008178bea2f",
+  "launcherSha256": "b914a1eef562b1ef281e28024af7facfa54a2eb593aebff352e36e0179fb3bcb",
   "operator": {
     "release": "219970d090df021cee70e330ddd17fd5d89d06fca77f5907137ea7770e93aec0",
     "cliSha256": "b0099d5588942b04ea29344646532503a2470750cea3842a1366eda6f1c485dc",
