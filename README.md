@@ -19,7 +19,9 @@ virgo install --mode local --machine my-machine --root "$HOME/virgo"
 ```
 
 Acquisition creates `~/.local/bin/virgo`, supplies its private checksum-pinned
-Bun 1.3.14 runtime, verifies the selected CLI, and adds the command directory to
+Bun 1.3.14 runtime at `~/.local/share/virgo/bootstrap/bun/1.3.14/bin/bun`,
+records its absolute path, digest and file identity in the private owner-home
+`~/.local/share/virgo/bootstrap/config.json`, verifies the selected CLI, and adds the command directory to
 the ordinary login profile (`.zprofile` for zsh, `.bash_profile` for Bash).
 It preserves existing profile content and adds the path once. You do not need a
 repository checkout, a separately installed Bun, a CLI alias, or receipt decoding.
@@ -71,10 +73,35 @@ virgo --directory /absolute/installation-directory native-session status
 
 The launcher reads that instance's existing active-release receipt, verifies the
 cached archive checksum and its installed CLI/descriptor bytes, then passes the
-arguments unchanged to its installed `bin/virgo`. It does not fetch or substitute
-a newer CLI for an older target, or edit its configuration or state. A root with
+arguments unchanged to its installed `bin/virgo`. The launcher and supervisor
+use only the configured, checksum-verified owner-home Bun. Existing targets also
+require the exact supervisor file identity and verified runner archive. Missing
+or mismatched pins fail before lifecycle effects; there is no PATH, Homebrew,
+launcher-package or user-selected interpreter fallback. It does not fetch or substitute
+a newer CLI for an older target, or edit its configuration or state. An explicit
+interpreter migration uses the independently pinned official operator CLI, while
+the installed release stays unchanged. A root with
 one instance can also select the existing CLI's root-aware operator commands;
 use the exact instance directory for ordinary client commands.
+
+An existing registration that uses a different interpreter needs the explicit
+journaled transition before ordinary lifecycle commands:
+
+```sh
+virgo --directory /absolute/installation-directory host runtime prepare
+virgo --directory /absolute/installation-directory host runtime apply --plan-id '<returned ID>'
+```
+
+Preparation binds the exact installation/configuration, configured Bun, old runner
+archive and old/new launchd registration. Apply changes only the independent
+supervisor interpreter; it preserves the running daemon and providers, selected
+release, configuration, job label and interval. Repeat the same apply plan after
+an interrupted or unknown result. Retained old/new preimages fence that retry;
+ordinary lifecycle commands refuse while it is pending. No automatic rollback
+or permission to reverse another operation is implied. A matching existing Bun
+and registration remain unchanged; repeat acquisition never overwrites or repins
+an existing mismatched runtime. Current release selection and the separately
+pinned operator CLI are explicit independent metadata fields.
 
 Three existing product commands run before the product's client selector. Select
 their verified installed CLI with the stable command, which consumes only the

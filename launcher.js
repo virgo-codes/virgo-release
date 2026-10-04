@@ -7,6 +7,8 @@ import { spawn } from 'node:child_process';
 
 const REPOSITORY = 'virgo-codes/virgo-release';
 const CURRENT_URL = `https://raw.githubusercontent.com/${REPOSITORY}/main/current.json`;
+const BUN_VERSION = '1.3.14';
+const BUN_SHA = 'e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233';
 const HASH = /^[a-f0-9]{64}$/u;
 const stateRoot = process.env.VIRGO_LAUNCHER_STATE ?? join(homedir(), '.local', 'share', 'virgo', 'launcher');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -47,25 +49,41 @@ async function directory(path) {
   if (!info.isDirectory() || info.isSymbolicLink() || ((info.mode & 0o022) !== 0 && !(info.uid === 0 && (info.mode & 0o1000))) || await realpath(path) !== path)
     fail('Installation directory is unsafe. Use the original canonical installation path.');
 }
+async function configuredRuntime() {
+  const executable = join(homedir(), '.local/share/virgo/bootstrap/bun', BUN_VERSION, 'bin/bun');
+  const pin = await json(join(homedir(), '.local/share/virgo/bootstrap/config.json'), 8192, true);
+  if (pin.schemaVersion !== 1 || pin.bunVersion !== BUN_VERSION || pin.executable !== executable || pin.sha256 !== BUN_SHA || typeof pin.identity !== 'string')
+    fail('Official bootstrap runtime configuration is missing or changed; repeat official acquisition.');
+  await directory(dirname(executable));
+  const info = await lstat(executable), identity = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+  if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022) !== 0 || (info.mode & 0o111) === 0 || await realpath(executable) !== executable ||
+      !/^\d+:\d+:\d+:\d+(?:\.\d+)?$/u.test(pin.identity) || pin.identity.slice(pin.identity.indexOf(':')) !== identity.slice(identity.indexOf(':')) ||
+      digest(await regularBytes(executable, 128 * 1024 * 1024)) !== BUN_SHA)
+    fail('Configured Bun is missing or mismatched; no runtime fallback is allowed. Repeat official acquisition.');
+  return { executable, identity };
+}
+
 function metadata(value) {
   if (value.sourceRepository !== 'virgo-codes/virgo' || value.platform?.os !== 'macos' || value.platform?.architecture !== 'arm64' || !HASH.test(value.release) || !HASH.test(value.cliSha256))
     fail('Official current metadata is invalid; repeat after the official selection is repaired.');
   return value;
 }
-async function currentCLI(suppliedMetadata) {
+async function currentCLI(suppliedMetadata, operator = false) {
   await mkdir(stateRoot, { recursive: true, mode: 0o700 });
   const scratch = await mkdtemp(join(stateRoot, '.download-'));
   try {
     const metadataPath = suppliedMetadata ?? join(scratch, 'current.json');
     if (!suppliedMetadata) await download(CURRENT_URL, metadataPath);
     const current = metadata(await json(metadataPath));
-    const final = join(stateRoot, 'releases', current.cliSha256, 'virgo');
+    const pin = operator ? object(current.operator) : current;
+    if (!HASH.test(pin.release) || !HASH.test(pin.cliSha256)) fail('Official operator CLI is not pinned; repeat official acquisition after publication.');
+    const final = join(stateRoot, 'releases', pin.cliSha256, 'virgo');
     try {
-      if (digest(await regularBytes(final, 64 * 1024 * 1024)) === current.cliSha256) return { path: final, current };
+      if (digest(await regularBytes(final, 64 * 1024 * 1024)) === pin.cliSha256) return { path: final, current };
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const staged = join(scratch, 'virgo');
-    await download(`https://github.com/${REPOSITORY}/releases/download/release-${current.release}/virgo-macos-arm64`, staged);
-    if (digest(await regularBytes(staged, 64 * 1024 * 1024)) !== current.cliSha256)
+    await download(`https://github.com/${REPOSITORY}/releases/download/release-${pin.release}/virgo-macos-arm64`, staged);
+    if (digest(await regularBytes(staged, 64 * 1024 * 1024)) !== pin.cliSha256)
       fail('Release CLI checksum failed; the existing command and installation are unchanged. Repeat the same command to retry.');
     await mkdir(dirname(final), { recursive: true, mode: 0o700 });
     await rename(staged, final);
@@ -97,14 +115,18 @@ async function installedCLI(requested) {
       selected !== join(root, 'instances', encodeURIComponent(`${target.machine}\0agent_host\0${target.instance}`)) ||
       active.releaseDirectory !== join(root, 'releases', `${state.installedRelease}-${artifact.digest}`))
     fail('Installation receipt and selected release differ. Resume the existing installation plan before retrying.');
-  await directory(active.releaseDirectory);
-  if (typeof verified.handle !== 'string' || !isAbsolute(verified.handle) || await realpath(verified.handle) !== verified.handle)
+  const release = await verifiedReleaseCLI(active.releaseDirectory, verified.handle, artifact.digest, state.installedRelease);
+  return { ...release, root, directory: selected, target, config, state };
+}
+async function verifiedReleaseCLI(releaseDirectory, handle, archiveDigest, release) {
+  await directory(releaseDirectory);
+  if (typeof handle !== 'string' || !isAbsolute(handle) || await realpath(handle) !== handle)
     fail('The verified installation archive is unavailable; restore the original cached distribution and retry.');
-  const archiveBytes = await regularBytes(verified.handle, 384 * 1024 * 1024);
-  if (digest(archiveBytes) !== artifact.digest) fail('Installed distribution checksum failed; restore the original cached distribution and retry.');
+  const archiveBytes = await regularBytes(handle, 384 * 1024 * 1024);
+  if (digest(archiveBytes) !== archiveDigest) fail('Installed distribution checksum failed; restore the original cached distribution and retry.');
   const archive = object(JSON.parse(archiveBytes));
-  if (archive.schemaVersion !== 1 || archive.release !== state.installedRelease || archive.component !== target.component ||
-      archive.platform?.os !== artifact.platform.os || archive.platform?.architecture !== artifact.platform.architecture || !Array.isArray(archive.entries))
+  if (archive.schemaVersion !== 1 || archive.release !== release || archive.component !== 'agent_host' ||
+      archive.platform?.os !== 'macos' || archive.platform?.architecture !== 'arm64' || !Array.isArray(archive.entries))
     fail('Installed archive identity does not match the receipt.');
   const entry = name => {
     const matches = archive.entries.filter(item => item.path === name && item.kind === 'file');
@@ -112,16 +134,67 @@ async function installedCLI(requested) {
       fail('Installed archive does not contain its verified CLI and descriptor.');
     return matches[0];
   };
-  const cli = join(active.releaseDirectory, 'bin', 'virgo');
+  const cli = join(releaseDirectory, 'bin', 'virgo');
   for (const name of ['bin/virgo', 'release.json']) {
-    const pin = entry(name), path = join(active.releaseDirectory, name);
+    const pin = entry(name), path = join(releaseDirectory, name);
     if (await realpath(path) !== path || digest(await regularBytes(path, 64 * 1024 * 1024)) !== pin.digest)
       fail('Installed CLI or descriptor checksum failed; restore the original release and retry.');
   }
-  const descriptor = await json(join(active.releaseDirectory, 'release.json'));
-  if (descriptor.release !== state.installedRelease) fail('Installed descriptor names a different release.');
-  return { path: cli, root, directory: selected, target, config };
+  const descriptor = await json(join(releaseDirectory, 'release.json'));
+  if (descriptor.release !== release) fail('Installed descriptor names a different release.');
+  return { path: cli, descriptor, digest: entry('bin/virgo').digest };
 }
+/** Verify the existing registration, then use only the official configured runtime. */
+async function installedExecutable(selected, migration = false) {
+  const registration = join(selected.root, 'processes', 'supervision', 'registration');
+  await directory(registration);
+  const receipt = await json(join(registration, 'supervisor.json'), 1024 * 1024, true);
+  const verify = async pin => {
+    if (pin.schemaVersion !== 1 || pin.root !== selected.root || pin.launchAgentsDirectory !== join(homedir(), 'Library', 'LaunchAgents') ||
+        pin.intervalSeconds !== 5 || typeof pin.releaseDirectory !== 'string' || typeof pin.executable !== 'string' ||
+        typeof pin.executableIdentity !== 'string' || !/^\d+:\d+:\d+:\d+(?:\.\d+)?$/u.test(pin.executableIdentity))
+      fail('Installed supervisor registration is invalid; restore its original receipt before retrying.');
+    const parts = basename(pin.releaseDirectory).split('-');
+    if (parts.length !== 2 || !parts.every(part => HASH.test(part)) || pin.releaseDirectory !== join(selected.root, 'releases', `${parts[0]}-${parts[1]}`))
+      fail('Supervisor release is outside the selected installation.');
+    const slots = [selected.state.active, selected.state.previous];
+    const retained = slots.find(slot => slot?.releaseDirectory === pin.releaseDirectory && slot.artifact?.artifact?.digest === parts[1]);
+    const cli = await verifiedReleaseCLI(pin.releaseDirectory, retained?.artifact?.handle ?? join(selected.root, 'cache', parts[1]), parts[1], parts[0]);
+    if (pin.cli !== cli.path || pin.cliDigest !== cli.digest || cli.descriptor.daemonSupervision?.protocolVersion !== 1 ||
+        cli.descriptor.daemonSupervision?.cliExecutable !== 'bin/virgo')
+      fail('Supervisor CLI differs from its verified release.');
+    // The historical interpreter is inspected, never executed by migration.
+    // Retain the product's canonical path/file identity fence; Homebrew's owned
+    // Cellar ancestor may be group-writable. Configured Bun has stricter custody.
+    for (let at = dirname(pin.executable); at !== dirname(at); at = dirname(at)) {
+      const parent = await lstat(at);
+      if (!parent.isDirectory() || parent.isSymbolicLink() || await realpath(at) !== at) fail('Historical interpreter path changed.');
+    }
+    const info = await lstat(pin.executable);
+    const identity = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+    if (!info.isFile() || info.isSymbolicLink() || await realpath(pin.executable) !== pin.executable ||
+        ![0, process.getuid()].includes(info.uid) || (info.mode & 0o022) !== 0 || (info.mode & 0o111) === 0 ||
+        pin.executableIdentity.slice(pin.executableIdentity.indexOf(':')) !== identity.slice(identity.indexOf(':')))
+      fail('Recorded supervisor executable changed; restore the original verified executable before retrying.');
+  };
+  await verify(receipt);
+  // A retained replacement is product-owned recovery, not authority to choose another runtime.
+  let replacement;
+  try { replacement = await json(join(registration, 'replacement.json'), 1024 * 1024, true); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (replacement) {
+    if (replacement.schemaVersion !== 1 || Object.keys(replacement).length !== 3 ||
+        ![replacement.before, replacement.after].some(pin => JSON.stringify(pin) === JSON.stringify(receipt)) ||
+        JSON.stringify({ ...replacement.before, releaseDirectory: replacement.after.releaseDirectory, cli: replacement.after.cli, cliDigest: replacement.after.cliDigest }) !== JSON.stringify(replacement.after))
+      fail('Supervisor replacement differs from the retained registration.');
+    await verify(replacement.before); await verify(replacement.after);
+  }
+  const runtime = await configuredRuntime();
+  if (!migration && (receipt.executable !== runtime.executable || receipt.executableIdentity.slice(receipt.executableIdentity.indexOf(':')) !== runtime.identity.slice(runtime.identity.indexOf(':'))))
+    fail('Supervisor uses a different runtime; use the supported host runtime prepare/apply transition before lifecycle operations.');
+  return runtime.executable;
+}
+
 function parseOptions(args) {
   const flags = new Map();
   for (let index = 0; index < args.length; index += 2) {
@@ -153,7 +226,8 @@ function rootCommandArgs(argv, selected) {
   return argv;
 }
 async function main(argv) {
-  if (argv[0] === '--bootstrap-cache' && argv.length === 2) { await currentCLI(argv[1]); return 0; }
+  if (argv[0] === '--bootstrap-cache' && argv.length === 2) { await currentCLI(argv[1]); const current = await json(argv[1]); if (current.operator) await currentCLI(argv[1], true); return 0; }
+  await configuredRuntime();
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]))) {
     console.log('Usage: virgo install|upgrade --mode local|host --machine ID [--root ABS] [options]\n       virgo rollback --mode local|host --machine ID --plan-id ID [options]\n       virgo --directory ABS <installed command>\nInstall and upgrade select the verified official current release unless an exact release and distribution are supplied.');
     return 0;
@@ -162,9 +236,13 @@ async function main(argv) {
     if (!argv[1] || !isAbsolute(argv[1])) fail('--directory requires an absolute installation path.');
     const selected = await installedCLI(argv[1]);
     const command = argv.slice(2);
+    const migration = command[0] === 'host' && command[1] === 'runtime';
+    if (migration && !((command.length === 3 && command[2] === 'prepare') || (command.length === 5 && command[2] === 'apply' && command[3] === '--plan-id' && HASH.test(command[4])))) fail('Use host runtime prepare or host runtime apply --plan-id <returned ID>.');
     const rootCommand = ['skill', 'knowledge-setup', 'capability-setup'].includes(command[0]);
     const args = rootCommand ? rootCommandArgs(command, selected) : argv;
-    return run(process.execPath, [selected.path, ...args]);
+    const executable = await installedExecutable(selected, migration);
+    const cli = migration ? (await currentCLI(undefined, true)).path : selected.path;
+    return run(executable, [cli, ...args]);
   }
   if (!['install', 'upgrade', 'rollback'].includes(argv[0])) fail('Use --directory ABS for an installed command.');
   const flags = parseOptions(argv.slice(1));
@@ -181,14 +259,29 @@ async function main(argv) {
     const root = resolve(flags.get('--root') ?? join(homedir(), 'virgo'));
     const instance = flags.get('--instance') ?? (mode === 'host' ? 'host' : 'local-hub');
     const directory = join(root, 'instances', encodeURIComponent(`${flags.get('--machine')}\0agent_host\0${instance}`));
-    return run(process.execPath, [(await installedCLI(directory)).path, ...args]);
+    const selected = await installedCLI(directory);
+    return run(await installedExecutable(selected), [selected.path, ...args]);
   }
   if (flags.has('--plan-id')) fail('--plan-id is only supported for rollback.');
   if ((flags.has('--release') || distributions.length) && (!flags.has('--release') || distributions.length !== 1))
     fail('Exact release selection requires --release and exactly one distribution option.');
-  const selected = await currentCLI();
+  const root = resolve(flags.get('--root') ?? join(homedir(), 'virgo'));
+  const instance = flags.get('--instance') ?? (mode === 'host' ? 'host' : 'local-hub');
+  const targetDirectory = join(root, 'instances', encodeURIComponent(`${flags.get('--machine')}\0agent_host\0${instance}`));
+  let executable = (await configuredRuntime()).executable;
+  try {
+    await lstat(targetDirectory);
+    const installed = await installedCLI(targetDirectory);
+    const installedMode = ['host', 'remote_host'].includes(installed.config.mode) ? 'host' : 'local';
+    if (installedMode !== mode) fail('Mode differs from the selected installation.');
+    executable = await installedExecutable(installed);
+  } catch (error) {
+    // Only an absent target is a clean install; missing receipts inside one never fall back.
+    if (error.code !== 'ENOENT' || await lstat(targetDirectory).then(() => true, missing => missing.code === 'ENOENT' ? false : Promise.reject(missing))) throw error;
+  }
+  const selected = await currentCLI(undefined, true);
   if (!flags.has('--release')) args.push('--release', selected.current.release, '--github-repository', REPOSITORY);
-  return run(process.execPath, [selected.path, ...args]);
+  return run(executable, [selected.path, ...args]);
 }
 try { process.exitCode = await main(process.argv.slice(2)); }
 catch (error) { console.error(`virgo: ${error.message ?? 'Command failed; retry using the preserved installation.'}`); process.exitCode = 1; }
