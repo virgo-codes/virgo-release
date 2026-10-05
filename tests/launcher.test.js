@@ -102,6 +102,17 @@ try {
   success(command(virgo, ['--help'], env));
   success(command(virgo, ['install', '--mode', 'local', '--machine', 'local', '--root', join(root, 'install root')], env));
   await dispatch('current', ['install', '--mode', 'local', '--machine', 'local', '--root', join(root, 'install root'), '--release', newer, '--github-repository', 'virgo-codes/virgo-release']);
+  // Public routing proof only; real installer plan/idempotence/conversion is
+  // exercised by the product's installed-layout evidence, not this scripted CLI.
+  const markdownRoot = join(root, 'markdown target with spaces');
+  const markdown = ['install','markdown-convert','--root',markdownRoot,'--bundle',join(root,'attested bundle'),'--manifest','d'.repeat(64),'--discovery','copy'];
+  success(command(virgo,[...markdown,'--plan'],env)); await dispatch('current',[...markdown,'--plan']);
+  try { await lstat(markdownRoot); throw Error('Launcher plan created an install target'); } catch(error) { if(error.code!=='ENOENT')throw error; } cases++;
+  for(let attempt=0;attempt<2;attempt++){success(command(virgo,markdown,env));await dispatch('current',markdown);}
+  for(const args of [[...markdown,'--plan','--plan'],['install','markdown-convert','--root',markdownRoot], [...markdown,'--unknown','value']]) {
+    await rm(dispatchLog,{force:true});rejected(command(virgo,args,env));
+    try { await readFile(dispatchLog); throw Error('Invalid markdown flags reached CLI'); } catch(error) { if(error.code!=='ENOENT')throw error; } cases++;
+  }
   const quoted = join(root, 'root $(touch never-run) `quoted` *');
   const installArgs = ['install', '--mode', 'host', '--root', quoted, '--machine', 'host', '--hub-url', 'https://hub.example/', '--enrollment-credential-file', join(root, 'credential with spaces')];
   success(command(virgo, installArgs, env));

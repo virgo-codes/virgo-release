@@ -236,6 +236,18 @@ function rootCommandArgs(argv, selected) {
 async function main(argv) {
   if (argv[0] === '--bootstrap-cache' && argv.length === 2) { await currentCLI(argv[1]); const current = await json(argv[1]); if (current.operator) await currentCLI(argv[1], true); return 0; }
   await configuredRuntime();
+  if (argv[0] === 'install' && argv[1] === 'markdown-convert') {
+    const seen = new Set();
+    for (let index = 2; index < argv.length; index++) {
+      const flag = argv[index];
+      if (seen.has(flag) || !['--root', '--bundle', '--manifest', '--discovery', '--plan'].includes(flag)) fail('Use install markdown-convert --root ABS --bundle ABS --manifest SHA256 [--plan] [--discovery link|copy].');
+      seen.add(flag);
+      if (flag !== '--plan' && (!argv[++index] || argv[index].startsWith('--'))) fail('Markdown install option requires a value.');
+    }
+    if (!['--root', '--bundle', '--manifest'].every(flag => seen.has(flag))) fail('Markdown install requires --root, --bundle and --manifest.');
+    const selected = await currentCLI(undefined, true);
+    return run((await configuredRuntime()).executable, [selected.path, ...argv]);
+  }
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]))) {
     console.log('Usage: virgo install|upgrade --mode local|host --machine ID [--root ABS] [options]\n       virgo rollback --mode local|host --machine ID --plan-id ID [options]\n       virgo --directory ABS <installed command>\nInstall and upgrade select the verified official current release unless an exact release and distribution are supplied.');
     return 0;
