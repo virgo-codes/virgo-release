@@ -9,6 +9,10 @@ const REPOSITORY = 'virgo-codes/virgo-release';
 const CURRENT_URL = `https://raw.githubusercontent.com/${REPOSITORY}/main/current.json`;
 const BUN_VERSION = '1.3.14';
 const BUN_SHA = 'e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233';
+const PLATFORM = process.platform === 'darwin' && process.arch === 'arm64' ? { os: 'macos', architecture: 'arm64' }
+  : process.platform === 'linux' && process.arch === 'x64' ? { os: 'linux', architecture: 'x64' } : undefined;
+const RUNTIME_SHA = process.platform === 'linux' ? '9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf983190cea6d715be2ad74' : BUN_SHA;
+const matchesPlatform = platform => PLATFORM && platform?.os === PLATFORM.os && platform?.architecture === PLATFORM.architecture;
 const HASH = /^[a-f0-9]{64}$/u;
 const stateRoot = process.env.VIRGO_LAUNCHER_STATE ?? join(homedir(), '.local', 'share', 'virgo', 'launcher');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -52,21 +56,22 @@ async function directory(path) {
 async function configuredRuntime() {
   const executable = join(homedir(), '.local/share/virgo/bootstrap/bun', BUN_VERSION, 'bin/bun');
   const pin = await json(join(homedir(), '.local/share/virgo/bootstrap/config.json'), 8192, true);
-  if (pin.schemaVersion !== 1 || pin.bunVersion !== BUN_VERSION || pin.executable !== executable || pin.sha256 !== BUN_SHA || typeof pin.identity !== 'string')
+  if (!PLATFORM || pin.schemaVersion !== 1 || pin.bunVersion !== BUN_VERSION || pin.executable !== executable || pin.sha256 !== RUNTIME_SHA || typeof pin.identity !== 'string')
     fail('Official bootstrap runtime configuration is missing or changed; repeat official acquisition.');
   await directory(dirname(executable));
   const info = await lstat(executable), identity = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
   if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022) !== 0 || (info.mode & 0o111) === 0 || await realpath(executable) !== executable ||
       !/^\d+:\d+:\d+:\d+(?:\.\d+)?$/u.test(pin.identity) || pin.identity.slice(pin.identity.indexOf(':')) !== identity.slice(identity.indexOf(':')) ||
-      digest(await regularBytes(executable, 128 * 1024 * 1024)) !== BUN_SHA)
+      digest(await regularBytes(executable, 128 * 1024 * 1024)) !== RUNTIME_SHA)
     fail('Configured Bun is missing or mismatched; no runtime fallback is allowed. Repeat official acquisition.');
   return { executable, identity };
 }
 
 function metadata(value) {
-  if (value.sourceRepository !== 'virgo-codes/virgo' || value.platform?.os !== 'macos' || value.platform?.architecture !== 'arm64' || !HASH.test(value.release) || !HASH.test(value.cliSha256))
+  const selected = Array.isArray(value.platforms) ? value.platforms.filter(entry => matchesPlatform(entry?.platform)) : [value];
+  if (value.sourceRepository !== 'virgo-codes/virgo' || selected.length !== 1 || !matchesPlatform(selected[0]?.platform) || !HASH.test(selected[0].release) || !HASH.test(selected[0].cliSha256))
     fail('Official current metadata is invalid; repeat after the official selection is repaired.');
-  return value;
+  return { ...value, ...selected[0] };
 }
 async function currentCLI(suppliedMetadata, operator = false) {
   await mkdir(stateRoot, { recursive: true, mode: 0o700 });
@@ -82,7 +87,7 @@ async function currentCLI(suppliedMetadata, operator = false) {
       if (digest(await regularBytes(final, 64 * 1024 * 1024)) === pin.cliSha256) return { path: final, current };
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const staged = join(scratch, 'virgo');
-    await download(`https://github.com/${REPOSITORY}/releases/download/release-${pin.release}/virgo-macos-arm64`, staged);
+    await download(`https://github.com/${REPOSITORY}/releases/download/release-${pin.release}/virgo-${PLATFORM.os}-${PLATFORM.architecture}`, staged);
     if (digest(await regularBytes(staged, 64 * 1024 * 1024)) !== pin.cliSha256)
       fail('Release CLI checksum failed; the existing command and installation are unchanged. Repeat the same command to retry.');
     await mkdir(dirname(final), { recursive: true, mode: 0o700 });
@@ -111,7 +116,7 @@ async function installedCLI(requested) {
   if (state.schemaVersion !== 1 || config.schemaVersion !== 1 || typeof target.machine !== 'string' || typeof target.instance !== 'string' || target.component !== 'agent_host' ||
       typeof state.installedRelease !== 'string' || state.installedRelease !== config.release || config.machine !== target.machine ||
       artifact.release !== state.installedRelease || artifact.component !== target.component || artifact.format !== 'native_archive' || !HASH.test(artifact.digest) ||
-      artifact.platform?.os !== 'macos' || artifact.platform?.architecture !== 'arm64' ||
+      !matchesPlatform(artifact.platform) ||
       selected !== join(root, 'instances', encodeURIComponent(`${target.machine}\0agent_host\0${target.instance}`)) ||
       active.releaseDirectory !== join(root, 'releases', `${state.installedRelease}-${artifact.digest}`))
     fail('Installation receipt and selected release differ. Resume the existing installation plan before retrying.');
@@ -126,7 +131,7 @@ async function verifiedReleaseCLI(releaseDirectory, handle, archiveDigest, relea
   if (digest(archiveBytes) !== archiveDigest) fail('Installed distribution checksum failed; restore the original cached distribution and retry.');
   const archive = object(JSON.parse(archiveBytes));
   if (archive.schemaVersion !== 1 || archive.release !== release || archive.component !== 'agent_host' ||
-      archive.platform?.os !== 'macos' || archive.platform?.architecture !== 'arm64' || !Array.isArray(archive.entries))
+      !matchesPlatform(archive.platform) || !Array.isArray(archive.entries))
     fail('Installed archive identity does not match the receipt.');
   const entry = name => {
     const matches = archive.entries.filter(item => item.path === name && item.kind === 'file');
@@ -158,7 +163,7 @@ async function installedExecutable(selected, migration = false, planId) {
   }
   const receipt = await json(join(registration, 'supervisor.json'), 1024 * 1024, true);
   const verify = async pin => {
-    if (pin.schemaVersion !== 1 || pin.root !== selected.root || pin.launchAgentsDirectory !== join(homedir(), 'Library', 'LaunchAgents') ||
+    if (pin.schemaVersion !== 1 || pin.root !== selected.root || pin.launchAgentsDirectory !== (PLATFORM.os === 'linux' ? join(homedir(), '.config', 'systemd', 'user') : join(homedir(), 'Library', 'LaunchAgents')) ||
         pin.intervalSeconds !== 5 || typeof pin.releaseDirectory !== 'string' || typeof pin.executable !== 'string' ||
         typeof pin.executableIdentity !== 'string' || !/^\d+:\d+:\d+:\d+(?:\.\d+)?$/u.test(pin.executableIdentity))
       fail('Installed supervisor registration is invalid; restore its original receipt before retrying.');
@@ -234,7 +239,7 @@ function rootCommandArgs(argv, selected) {
   return argv;
 }
 async function main(argv) {
-  if (argv[0] === '--bootstrap-cache' && argv.length === 2) { await currentCLI(argv[1]); const current = await json(argv[1]); if (current.operator) await currentCLI(argv[1], true); return 0; }
+  if (argv[0] === '--bootstrap-cache' && argv.length === 2) { const { current } = await currentCLI(argv[1]); if (current.operator) await currentCLI(argv[1], true); return 0; }
   await configuredRuntime();
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]))) {
     console.log('Usage: virgo install|upgrade --mode local|host --machine ID [--root ABS] [options]\n       virgo rollback --mode local|host --machine ID --plan-id ID [options]\n       virgo --directory ABS <installed command>\nInstall and upgrade select the verified official current release unless an exact release and distribution are supplied.');

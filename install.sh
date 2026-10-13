@@ -3,8 +3,21 @@ set -euo pipefail
 umask 077
 readonly REPOSITORY='virgo-codes/virgo-release'
 readonly BUN_VERSION='1.3.14'
-readonly BUN_ARCHIVE_SHA='d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620'
-readonly BUN_SHA='e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233'
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64)
+    readonly BUN_ARCHIVE_SHA='d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620'
+    readonly BUN_SHA='e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233'
+    readonly BUN_PACKAGE='bun-darwin-aarch64'
+    hash_file() { shasum -a 256 "$1" | awk '{print $1}'; }
+    ;;
+  Linux:x86_64)
+    readonly BUN_ARCHIVE_SHA='951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f'
+    readonly BUN_SHA='9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf983190cea6d715be2ad74'
+    readonly BUN_PACKAGE='bun-linux-x64'
+    hash_file() { sha256sum "$1" | awk '{print $1}'; }
+    ;;
+  *) printf '%s\n' 'virgo acquisition: only macOS arm64 and Linux x64 are supported.' >&2; exit 1 ;;
+esac
 cleanup_dir=''
 cleanup() { [[ -z "$cleanup_dir" ]] || rm -rf -- "$cleanup_dir"; }
 trap cleanup EXIT
@@ -15,10 +28,11 @@ fail() { printf '%s\n' "virgo acquisition: $*" >&2; exit 1; }
 download() {
   curl -q --fail --location --silent --show-error --proto '=https' --proto-redir '=https' "$1" --output "$2" || fail 'download failed; existing command and installations are preserved. Repeat acquisition to retry.'
 }
-verify() { [[ "$(shasum -a 256 "$1" | awk '{print $1}')" == "$2" ]] || fail 'checksum verification failed; existing command and installations are preserved. Repeat acquisition to retry.'; }
-[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || fail 'only macOS arm64 is supported.'
+verify() { [[ "$(hash_file "$1")" == "$2" ]] || fail 'checksum verification failed; existing command and installations are preserved. Repeat acquisition to retry.'; }
 [[ "${HOME:-}" == /* ]] || fail 'HOME must be an absolute path.'
-for executable in curl unzip shasum plutil; do command -v "$executable" >/dev/null || fail "$executable is unavailable."; done
+for executable in curl unzip awk; do command -v "$executable" >/dev/null || fail "$executable is unavailable."; done
+if [[ "$BUN_PACKAGE" == bun-linux-x64 ]]; then command -v sha256sum >/dev/null || fail 'sha256sum is unavailable.';
+else command -v shasum >/dev/null || fail 'shasum is unavailable.'; fi
 
 state_root="$HOME/.local/share/virgo/launcher"
 bin_root="$HOME/.local/bin"
@@ -26,17 +40,16 @@ mkdir -p "$state_root/packages" "$bin_root"
 [[ ! -L "$state_root" && ! -L "$bin_root" ]] || fail 'command/cache directories must not be symbolic links.'
 cleanup_dir="$(mktemp -d "$state_root/packages/.acquire.XXXXXX")"
 download "https://raw.githubusercontent.com/$REPOSITORY/main/current.json" "$cleanup_dir/current.json"
-launcher_sha="$(plutil -extract launcherSha256 raw -o - "$cleanup_dir/current.json")" || fail 'official current metadata does not contain the launcher checksum.'
-[[ "$launcher_sha" =~ ^[a-f0-9]{64}$ ]] || fail 'invalid launcher checksum in official metadata.'
-download "https://raw.githubusercontent.com/$REPOSITORY/main/launcher.js" "$cleanup_dir/launcher.js"
-verify "$cleanup_dir/launcher.js" "$launcher_sha"
-download "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-darwin-aarch64.zip" "$cleanup_dir/bun.zip"
+download "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$BUN_PACKAGE.zip" "$cleanup_dir/bun.zip"
 verify "$cleanup_dir/bun.zip" "$BUN_ARCHIVE_SHA"
 mkdir "$cleanup_dir/bin"
-unzip -p "$cleanup_dir/bun.zip" bun-darwin-aarch64/bun > "$cleanup_dir/bin/bun"
+unzip -p "$cleanup_dir/bun.zip" "$BUN_PACKAGE/bun" > "$cleanup_dir/bin/bun"
 verify "$cleanup_dir/bin/bun" "$BUN_SHA"
 chmod 700 "$cleanup_dir/bin/bun"
 rm "$cleanup_dir/bun.zip"
+launcher_sha="$("$cleanup_dir/bin/bun" -e 'const v=await Bun.file(process.argv[1]).json();if(!/^[a-f0-9]{64}$/.test(v.launcherSha256))process.exit(1);console.log(v.launcherSha256)' "$cleanup_dir/current.json")" || fail 'official current metadata does not contain the launcher checksum.'
+download "https://raw.githubusercontent.com/$REPOSITORY/main/launcher.js" "$cleanup_dir/launcher.js"
+verify "$cleanup_dir/launcher.js" "$launcher_sha"
 VIRGO_LAUNCHER_STATE="$state_root" "$cleanup_dir/bin/bun" "$cleanup_dir/launcher.js" --bootstrap-cache "$cleanup_dir/current.json"
 # Configure the single owner-home runtime only after every acquisition download passed.
 # A matching existing executable is retained in place, preserving supervisor inode pins.
@@ -104,9 +117,10 @@ wrapper="$(mktemp "$bin_root/.virgo.XXXXXX")"
 {
   printf '#!/usr/bin/env bash\nset -euo pipefail\n'
   printf 'package=%q\nstate_root=%q\nbootstrap_bun=%q\n' "$package" "$state_root" "$bootstrap_bun"
+  declare -f hash_file
   printf '[[ ! -L "$bootstrap_bun" ]] || { echo "virgo: configured runtime is a symlink." >&2; exit 1; }\n'
-  printf '[[ "$(shasum -a 256 "$bootstrap_bun" | awk '\''{print $1}'\'')" == %q ]] || { echo "virgo: internal runtime checksum failed; repeat official acquisition." >&2; exit 1; }\n' "$BUN_SHA"
-  printf '[[ "$(shasum -a 256 "$package/launcher.js" | awk '\''{print $1}'\'')" == %q ]] || { echo "virgo: launcher checksum failed; repeat official acquisition." >&2; exit 1; }\n' "$launcher_sha"
+  printf '[[ "$(hash_file "$bootstrap_bun")" == %q ]] || { echo "virgo: internal runtime checksum failed; repeat official acquisition." >&2; exit 1; }\n' "$BUN_SHA"
+  printf '[[ "$(hash_file "$package/launcher.js")" == %q ]] || { echo "virgo: launcher checksum failed; repeat official acquisition." >&2; exit 1; }\n' "$launcher_sha"
   printf 'export VIRGO_LAUNCHER_STATE="$state_root"\nexec "$bootstrap_bun" "$package/launcher.js" "$@"\n'
 } > "$wrapper"
 chmod 700 "$wrapper"
