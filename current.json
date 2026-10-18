@@ -14,10 +14,10 @@
   "sourceRepository": "virgo-codes/virgo",
   "launcherSha256": "ee0225427c9659bc651c0eae67ce48030a706df5a59c09500337b1e2c7fc5626",
   "operator": {
-    "release": "975edfb34a230dcdc6de2184c8d6878b0bc56100eb57c265dc98544509a84197",
-    "cliSha256": "c3dc8a5a553ace5300957fa97f36b57e4b592cf9738d0b4ed1623a5d582be42e",
-    "sourceCommit": "29ed3d21c4e78d085fb06c0470ec2d340144b2a6",
-    "sourceTree": "7beb3953d60d3b317d4ca32a89e086e14783fd8c"
+    "release": "71ea5e688d3f152d6cc509b7a524ba78c277d7623533772bc6357ad4160eaa00",
+    "cliSha256": "0434cc6d26cc46e90a6e5adae8b04d00b803fc8dbcc8c4a530d61ce5e9c59dc4",
+    "sourceCommit": "fa5fc5ae191fc007d22c9ad14361a66772569b4e",
+    "sourceTree": "df45e10139cb96f4586d3e83c84362bc4467ff28"
   },
   "platforms": [
     {
@@ -34,10 +34,10 @@
       "manifestDigest": "9aa45ac17426e644eb91521e1d5bfc359880967bb5da256196b62d37b0173cd6",
       "cliSha256": "a9a7aee8eb21a35ad2f37915de54730a26fa140c26cfdf30234e99b32d6e2409",
       "operator": {
-        "release": "975edfb34a230dcdc6de2184c8d6878b0bc56100eb57c265dc98544509a84197",
-        "cliSha256": "c3dc8a5a553ace5300957fa97f36b57e4b592cf9738d0b4ed1623a5d582be42e",
-        "sourceCommit": "29ed3d21c4e78d085fb06c0470ec2d340144b2a6",
-        "sourceTree": "7beb3953d60d3b317d4ca32a89e086e14783fd8c"
+        "release": "71ea5e688d3f152d6cc509b7a524ba78c277d7623533772bc6357ad4160eaa00",
+        "cliSha256": "0434cc6d26cc46e90a6e5adae8b04d00b803fc8dbcc8c4a530d61ce5e9c59dc4",
+        "sourceCommit": "fa5fc5ae191fc007d22c9ad14361a66772569b4e",
+        "sourceTree": "df45e10139cb96f4586d3e83c84362bc4467ff28"
       }
     },
     {
