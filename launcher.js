@@ -412,7 +412,7 @@ async function main(argv) {
     const target = await targetCLI(flags.get('--release'));
     if (target.path) return run(executable, [target.path, ...args]);
     if (target.integrity) {
-      console.error(`virgo: integrity retrying: ${target.integrity} Release ${flags.get('--release')} was not run or cached after ${target.attempts} verification attempts; the installed release is unchanged and keeps working.`);
+      console.error(`virgo: installed version kept, still working; integrity failed: ${target.integrity.replace(/\.$/u, '')}; the next upgrade run will retry`);
       return 75;
     }
     console.error(`virgo: target unavailable: ${target.unavailable} Continuing with the official operator.`);
