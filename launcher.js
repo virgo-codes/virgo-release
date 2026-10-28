@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, lstat, realpath, readFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { open, lstat, realpath, readFile, writeFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -32,8 +32,8 @@ async function run(executable, args) {
     });
   });
 }
-async function download(url, path) {
-  if (await run('curl', ['-q', '--fail', '--location', '--silent', '--show-error', '--proto', '=https', '--proto-redir', '=https', url, '--output', path]) !== 0)
+async function download(url, path, headers = []) {
+  if (await run('curl', ['-q', '--fail', '--location', '--silent', '--show-error', '--proto', '=https', '--proto-redir', '=https', ...headers.flatMap(header => ['--header', header]), url, '--output', path]) !== 0)
     fail('Download failed; the existing command and installation are unchanged. Repeat the same command to retry.');
 }
 async function regularBytes(path, maximum, privateFile = false) {
@@ -94,6 +94,122 @@ async function currentCLI(suppliedMetadata, operator = false) {
     await rename(staged, final);
     return { path: final, current };
   } finally { await rm(scratch, { recursive: true, force: true }); }
+}
+
+// An explicit official GitHub release runs only its own CLI, fetched and verified
+// as virgo's GitHub distribution does (distribution/github-release.ts and
+// local-distribution.ts). Unavailable targets fall through; unverified bytes never run.
+const MAX_API_BYTES = 2 * 1024 * 1024, MAX_MANIFEST_BYTES = 1024 * 1024, MAX_ARCHIVE_BYTES = 384 * 1024 * 1024;
+const INTEGRITY_ATTEMPTS = 3, INTEGRITY_BACKOFF_MS = 1000;
+class TargetFailure extends Error { constructor(kind, message) { super(message); this.kind = kind; } }
+const unavailable = message => { throw new TargetFailure('unavailable', message); };
+const integrity = message => { throw new TargetFailure('integrity', message); };
+const releaseName = value => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value);
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+const manifestDigest = ({ release, artifacts, compatibility }) => digest(canonical({ release, artifacts, ...(compatibility === undefined ? {} : { compatibility }) }));
+async function apiBytes(url, path, accept, maximum, missing) {
+  try { await download(url, path, [`accept: ${accept}`, 'user-agent: virgo-release-installer', 'x-github-api-version: 2022-11-28']); }
+  catch { unavailable(missing); }
+  const info = await lstat(path).catch(() => unavailable(missing));
+  if (!info.isFile() || info.size > maximum) integrity('GitHub Release response exceeds its size limit.');
+  return readFile(path);
+}
+async function verifiedTarget(release, scratch) {
+  const tag = `release-${release}`, api = `https://api.github.com/repos/${REPOSITORY}/releases`;
+  if (!releaseName(release) || !releaseName(tag)) integrity('GitHub repository, release, or tag is unsafe.');
+  const browser = name => new URL(`https://github.com/${REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`).href;
+  const parse = (bytes, message) => { try { return JSON.parse(bytes); } catch { return integrity(message); } };
+  const metadata = parse(await apiBytes(`${api}/tags/${encodeURIComponent(tag)}`, join(scratch, 'metadata.json'), 'application/vnd.github+json', MAX_API_BYTES,
+    'GitHub Release metadata is unavailable.'), 'GitHub Release metadata is malformed.');
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) integrity('GitHub Release metadata is malformed.');
+  if (metadata.tag_name !== tag || metadata.draft === true || !Array.isArray(metadata.assets)) integrity('GitHub Release metadata does not match the selected tag.');
+  const names = new Set();
+  for (const asset of metadata.assets) {
+    if (!asset || typeof asset !== 'object' || Array.isArray(asset) || !Number.isSafeInteger(asset.id) || asset.id < 1 || typeof asset.name !== 'string' ||
+        !releaseName(asset.name) || !Number.isSafeInteger(asset.size) || asset.size < 0)
+      integrity('GitHub Release asset metadata is malformed.');
+    if (names.has(asset.name)) integrity('GitHub Release contains duplicate asset names.');
+    names.add(asset.name);
+  }
+  const exactAsset = async (name, maximum) => {
+    const selected = metadata.assets.find(asset => asset.name === name) ?? unavailable(`GitHub Release is missing required asset ${name}.`);
+    if (selected.size > maximum) integrity(`GitHub Release asset ${name} exceeds its size limit.`);
+    return apiBytes(`${api}/assets/${selected.id}`, join(scratch, `asset-${selected.id}`), 'application/octet-stream', maximum, 'GitHub Release asset is unavailable.');
+  };
+  const manifest = parse(await exactAsset(`${release}.json`, MAX_MANIFEST_BYTES), 'GitHub Release manifest is malformed.');
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || typeof manifest.release !== 'string' || !HASH.test(String(manifest.manifestDigest)) || !Array.isArray(manifest.artifacts))
+    integrity('Release manifest is malformed.');
+  for (const artifact of manifest.artifacts) {
+    if (!artifact || typeof artifact !== 'object' || !['hub', 'agent_host', 'native_runtime', 'cli', 'mcp', 'hooks'].includes(String(artifact.component)) || artifact.release !== manifest.release ||
+        !artifact.platform || !['linux', 'macos'].includes(String(artifact.platform.os)) || !['arm64', 'x64'].includes(String(artifact.platform.architecture)) || !HASH.test(String(artifact.digest)))
+      integrity('Release artifact identity is malformed.');
+    if (!(artifact.format === 'oci_image' && typeof artifact.source === 'string') &&
+        !(artifact.format === 'native_archive' && ['local', 'https'].includes(artifact.source?.kind)))
+      integrity('Release artifact format or source is unsupported.');
+  }
+  if (manifest.compatibility !== undefined && (!manifest.compatibility || typeof manifest.compatibility !== 'object' || Array.isArray(manifest.compatibility)))
+    integrity('Release compatibility metadata is malformed.');
+  if (manifestDigest(manifest) !== manifest.manifestDigest) integrity('Release manifest digest failed.');
+  if (manifest.release !== release) integrity('GitHub Release manifest names a different release.');
+  const artifacts = manifest.artifacts.filter(artifact => matchesPlatform(artifact.platform));
+  if (artifacts.length === 0) unavailable('GitHub Release has no artifact for this platform.');
+  const hosts = artifacts.filter(artifact => artifact.component === 'agent_host' && artifact.format === 'native_archive');
+  if (hosts.length !== 1) integrity('Release manifest must contain exactly one agent_host native archive for this platform.');
+  const [artifact] = hosts;
+  const href = (() => { try { return artifact.source.kind === 'https' ? new URL(String(artifact.source.url)).href : undefined; } catch { return undefined; } })();
+  const name = [`${release}.vra`, `${release}-${PLATFORM.os}-${PLATFORM.architecture}.vra`].find(candidate => href === browser(candidate));
+  if (name === undefined) integrity('GitHub Release manifest points outside its pinned archive asset.');
+  const archiveBytes = await exactAsset(name, MAX_ARCHIVE_BYTES);
+  if (digest(archiveBytes) !== artifact.digest) integrity('GitHub Release archive hash differs from its manifest.');
+  // Archive, CLI and descriptor identity exactly as verifiedReleaseCLI checks an installed release.
+  const archive = parse(archiveBytes, 'Release archive identity does not match the manifest.');
+  if (!archive || typeof archive !== 'object' || archive.schemaVersion !== 1 || archive.release !== release || archive.component !== 'agent_host' ||
+      !matchesPlatform(archive.platform) || !Array.isArray(archive.entries))
+    integrity('Release archive identity does not match the manifest.');
+  const entry = path => {
+    const matches = archive.entries.filter(item => item?.path === path && item.kind === 'file');
+    const bytes = matches.length === 1 && typeof matches[0].content === 'string' ? Buffer.from(matches[0].content, 'base64') : undefined;
+    if (!bytes || !HASH.test(String(matches[0].digest)) || digest(bytes) !== matches[0].digest) integrity('Release archive does not contain its verified CLI and descriptor.');
+    return { bytes, digest: matches[0].digest };
+  };
+  const cli = entry('bin/virgo');
+  if (parse(entry('release.json').bytes, 'Release descriptor is malformed.')?.release !== release) integrity('Release descriptor names a different release.');
+  return cli;
+}
+/** Returns R's cached verified CLI path, or why it is unavailable or failed integrity. */
+async function targetCLI(release) {
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+  let integrityCause;
+  for (let attempt = 1; ; attempt++) {
+    const scratch = await mkdtemp(join(stateRoot, '.target-'));
+    try {
+      const cli = await verifiedTarget(release, scratch);
+      const final = join(stateRoot, 'releases', cli.digest, 'virgo');
+      try {
+        if (digest(await regularBytes(final, 64 * 1024 * 1024)) === cli.digest) return { path: final };
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const staged = join(scratch, 'virgo');
+      await writeFile(staged, cli.bytes, { mode: 0o600 });
+      await mkdir(dirname(final), { recursive: true, mode: 0o700 });
+      await rename(staged, final);
+      return { path: final };
+    } catch (error) {
+      if (!(error instanceof TargetFailure)) throw error;
+      // A fetch failure before any integrity failure keeps today's path, unretried.
+      if (error.kind === 'unavailable' && integrityCause === undefined) return { unavailable: error.message };
+      if (error.kind === 'integrity') integrityCause = error.message;
+      if (attempt >= INTEGRITY_ATTEMPTS) return { integrity: integrityCause, attempts: attempt };
+      const delay = INTEGRITY_BACKOFF_MS * 2 ** (attempt - 1);
+      console.error(error.kind === 'integrity'
+        ? `virgo: target integrity check failed: ${error.message} The artifact was discarded and not run; re-fetching in ${delay / 1000}s.`
+        : `virgo: target re-fetch was not available: ${error.message} Re-fetching in ${delay / 1000}s.`);
+      await new Promise(accept => setTimeout(accept, delay));
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  }
 }
 
 /** Read the existing installer receipt and archive; never choose newest for an installed target. */
@@ -291,6 +407,15 @@ async function main(argv) {
   } catch (error) {
     // Only an absent target is a clean install; missing receipts inside one never fall back.
     if (error.code !== 'ENOENT' || await lstat(targetDirectory).then(() => true, missing => missing.code === 'ENOENT' ? false : Promise.reject(missing))) throw error;
+  }
+  if (flags.has('--release') && flags.get('--github-repository') === REPOSITORY) {
+    const target = await targetCLI(flags.get('--release'));
+    if (target.path) return run(executable, [target.path, ...args]);
+    if (target.integrity) {
+      console.error(`virgo: integrity retrying: ${target.integrity} Release ${flags.get('--release')} was not run or cached after ${target.attempts} verification attempts; the installed release is unchanged and keeps working.`);
+      return 75;
+    }
+    console.error(`virgo: target unavailable: ${target.unavailable} Continuing with the official operator.`);
   }
   const selected = await currentCLI(undefined, true);
   if (!flags.has('--release')) args.push('--release', selected.current.release, '--github-repository', REPOSITORY);
