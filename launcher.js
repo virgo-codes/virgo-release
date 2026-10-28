@@ -96,6 +96,16 @@ async function currentCLI(suppliedMetadata, operator = false) {
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 
+/** The official channel's current release for this platform, without selecting its operator CLI. */
+async function currentRelease() {
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+  const scratch = await mkdtemp(join(stateRoot, '.download-'));
+  try {
+    await download(CURRENT_URL, join(scratch, 'current.json'));
+    return metadata(await json(join(scratch, 'current.json'))).release;
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+}
+
 // An explicit official GitHub release runs only its own CLI, fetched and verified
 // as virgo's GitHub distribution does (distribution/github-release.ts and
 // local-distribution.ts). Unavailable targets fall through; unverified bytes never run.
@@ -408,17 +418,22 @@ async function main(argv) {
     // Only an absent target is a clean install; missing receipts inside one never fall back.
     if (error.code !== 'ENOENT' || await lstat(targetDirectory).then(() => true, missing => missing.code === 'ENOENT' ? false : Promise.reject(missing))) throw error;
   }
-  if (flags.has('--release') && flags.get('--github-repository') === REPOSITORY) {
-    const target = await targetCLI(flags.get('--release'));
+  // Without --release the official current release is the target, selected and
+  // verified exactly as an explicit official --release; it never falls back.
+  const plain = !flags.has('--release');
+  if (plain || flags.get('--github-repository') === REPOSITORY) {
+    const release = plain ? await currentRelease() : flags.get('--release');
+    if (plain) args.push('--release', release, '--github-repository', REPOSITORY);
+    const target = await targetCLI(release);
     if (target.path) return run(executable, [target.path, ...args]);
     if (target.integrity) {
       console.error(`virgo: installed version kept, still working; integrity failed: ${target.integrity.replace(/\.$/u, '')}; the next upgrade run will retry`);
       return 75;
     }
+    if (plain) fail(`target unavailable: ${target.unavailable} Release ${release} was not run; the installed version is unchanged. Repeat the command to retry.`);
     console.error(`virgo: target unavailable: ${target.unavailable} Continuing with the official operator.`);
   }
   const selected = await currentCLI(undefined, true);
-  if (!flags.has('--release')) args.push('--release', selected.current.release, '--github-repository', REPOSITORY);
   return run(executable, [selected.path, ...args]);
 }
 try { process.exitCode = await main(process.argv.slice(2)); }
