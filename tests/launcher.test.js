@@ -4,6 +4,13 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
+import { platform, bunPackage, cliAsset } from './fixture-curl.js';
+
+// Runs on macOS arm64, or on Linux x64 with VIRGO_TEST_BUN_ARCHIVE naming the
+// pinned Bun 1.3.14 zip (as tests/target-dispatch.test.js).
+if (!platform) throw new Error('Run on macOS arm64 or Linux x64.');
+const linux = platform.os === 'linux';
+if (linux && !process.env.VIRGO_TEST_BUN_ARCHIVE) throw new Error('On Linux x64, set VIRGO_TEST_BUN_ARCHIVE to the pinned Bun 1.3.14 zip.');
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const root = await mkdtemp(join(await import('node:fs/promises').then(m => m.realpath(tmpdir())), 'virgo-launcher-test-'));
@@ -24,24 +31,25 @@ let fixtureHome;
 const cli = marker => `#!/unusable/interpreter\nif(process.env.VIRGO_TEST_EXPECT_EXECUTABLE&&await import('node:fs/promises').then(m=>m.realpath(process.execPath))!==process.env.VIRGO_TEST_EXPECT_EXECUTABLE){console.error('supervisor interpreter mismatch');process.exit(88);}
 await Bun.write(process.env.VIRGO_TEST_DISPATCH,JSON.stringify({marker:${JSON.stringify(marker)},args:process.argv.slice(2)}));\nconsole.log(JSON.stringify({ok:true,marker:${JSON.stringify(marker)}}));\nprocess.exit(Number(process.env.VIRGO_TEST_CLI_EXIT??0));\n`;
 await writeFile(assetPath, cli('current'));
-const current = { ...await Bun.file(join(repository, 'current.json')).json(), release: newer, cliSha256: sha(await readFile(assetPath)), launcherSha256: sha(await readFile(launcherPath)), operator: {release: newer,cliSha256:sha(await readFile(assetPath))} };
+// A single-platform channel for this runner; the published per-platform selection is not a fixture.
+const { platforms: _published, ...official } = await Bun.file(join(repository, 'current.json')).json();
+const current = { ...official, platform, release: newer, cliSha256: sha(await readFile(assetPath)), launcherSha256: sha(await readFile(launcherPath)), operator: {release: newer,cliSha256:sha(await readFile(assetPath))} };
 await writeFile(metadataPath, JSON.stringify(current));
-const runtime = join(fixtureDir, 'bun-darwin-aarch64'); await mkdir(runtime);
-await copyFile(process.execPath, join(runtime, 'bun'));
 const zip = join(fixtureDir, 'bun.zip');
-if (spawnSync('/usr/bin/zip', ['-q', '-r', zip, 'bun-darwin-aarch64'], { cwd: fixtureDir }).status !== 0) throw new Error('Could not prepare isolated runtime archive.');
 let installer = await readFile(join(repository, 'install.sh'), 'utf8');
-installer = installer.replace(/readonly BUN_ARCHIVE_SHA='[a-f0-9]+'/u, `readonly BUN_ARCHIVE_SHA='${sha(await readFile(zip))}'`)
-  .replace(/readonly BUN_SHA='[a-f0-9]+'/u, `readonly BUN_SHA='${sha(await readFile(process.execPath))}'`);
+if (linux) {
+  await copyFile(process.env.VIRGO_TEST_BUN_ARCHIVE, zip);
+  if (sha(await readFile(zip)) !== '951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f') throw new Error('Wrong Linux Bun fixture archive.');
+} else {
+  const runtime = join(fixtureDir, bunPackage); await mkdir(runtime);
+  await copyFile(process.execPath, join(runtime, 'bun'));
+  if (spawnSync('/usr/bin/zip', ['-q', '-r', zip, bunPackage], { cwd: fixtureDir }).status !== 0) throw new Error('Could not prepare isolated runtime archive.');
+  installer = installer.replace(/readonly BUN_ARCHIVE_SHA='[a-f0-9]+'/u, `readonly BUN_ARCHIVE_SHA='${sha(await readFile(zip))}'`)
+    .replace(/readonly BUN_SHA='[a-f0-9]+'/u, `readonly BUN_SHA='${sha(await readFile(process.execPath))}'`);
+}
 const installerPath = join(fixtureDir, 'install.sh'); await writeFile(installerPath, installer);
-const downloader = join(root, 'download.js');
-await writeFile(downloader, `import{readFile,writeFile,appendFile}from'node:fs/promises';import{join}from'node:path';
-const args=process.argv.slice(2),url=args.at(-3),out=args.at(-1);await appendFile(process.env.VIRGO_TEST_DOWNLOAD_LOG,JSON.stringify(args)+'\\n');
-if(args.at(-2)!=='--output'||!url.startsWith('https://'))process.exit(93);
-if(process.env.VIRGO_TEST_FAIL&&url.includes(process.env.VIRGO_TEST_FAIL))process.exit(23);
-if(process.env.VIRGO_TEST_INTERRUPT&&url.includes(process.env.VIRGO_TEST_INTERRUPT)){process.kill(process.ppid,'SIGTERM');process.exit(143);}
-let source=url.endsWith('/current.json')?join(process.env.VIRGO_TEST_FILES,'current.json'):url.endsWith('/launcher.js')?process.env.VIRGO_TEST_LAUNCHER:url.endsWith('/bun-darwin-aarch64.zip')?join(process.env.VIRGO_TEST_FILES,'bun.zip'):url.endsWith('/virgo-macos-arm64')?join(process.env.VIRGO_TEST_FILES,'current cli'):null;if(!source)process.exit(94);
-let bytes=await readFile(source);if(process.env.VIRGO_TEST_TAMPER&&url.includes(process.env.VIRGO_TEST_TAMPER))bytes=Buffer.concat([bytes,Buffer.from('tamper')]);await writeFile(out,bytes);`);
+// The shared stub serves this runner's exact acquisition URLs (tests/fixture-curl.js).
+const downloader = join(repository, 'tests', 'fixture-curl.js');
 await writeFile(join(bin, 'curl'), `#!/bin/bash\nexec ${shellQuote(process.execPath)} ${shellQuote(downloader)} "$@"\n`, { mode: 0o700 });
 await writeFile(join(bin, 'gh'), '#!/bin/bash\nexit 91\n', { mode: 0o700 });
 let cases = 0;
@@ -83,7 +91,7 @@ async function installedFixture(installationRoot, release, marker, instance = 'h
 }
 try {
   const coldHome = join(root, 'interrupted first acquisition'); await mkdir(coldHome);
-  rejected(command('/bin/bash', [installerPath], { ...environment, HOME: coldHome, VIRGO_TEST_TAMPER: 'virgo-macos-arm64' }));
+  rejected(command('/bin/bash', [installerPath], { ...environment, HOME: coldHome, VIRGO_TEST_TAMPER: cliAsset }));
   for (const missing of [join(coldHome,'.local','bin','virgo'),join(coldHome,'.zprofile')]) {
     try { await readFile(missing); throw new Error('Failed cold acquisition published a partial command/profile.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
@@ -262,15 +270,15 @@ try {
     try { await readFile(downloadLog); throw new Error('Malformed operation downloaded before validation.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   const oldWrapper = await readFile(virgo), oldProfile = await readFile(join(home, '.zprofile'));
-  for (const behavior of [{ VIRGO_TEST_FAIL: 'bun-darwin-aarch64.zip' }, { VIRGO_TEST_TAMPER: 'launcher.js' }, { VIRGO_TEST_TAMPER: 'bun-darwin-aarch64.zip' }, { VIRGO_TEST_INTERRUPT: 'bun-darwin-aarch64.zip' }]) {
+  for (const behavior of [{ VIRGO_TEST_FAIL: `${bunPackage}.zip` }, { VIRGO_TEST_TAMPER: 'launcher.js' }, { VIRGO_TEST_TAMPER: `${bunPackage}.zip` }, { VIRGO_TEST_INTERRUPT: `${bunPackage}.zip` }]) {
     rejected(command('/bin/bash', [installerPath], { ...env, ...behavior }));
     if (!oldWrapper.equals(await readFile(virgo)) || !oldProfile.equals(await readFile(join(home, '.zprofile')))) throw new Error('Failed acquisition replaced the previous command/profile.');
     success(command(virgo, ['--help'], env));
   }
   // A new selected CLI fails download/checksum before caller dispatch, retaining the installed target.
   const changed = cli('successor'); await writeFile(assetPath, changed); current.release = 'c'.repeat(64); current.cliSha256 = sha(changed); current.operator={release:current.release,cliSha256:current.cliSha256}; await writeFile(metadataPath, JSON.stringify(current));
-  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_FAIL: 'virgo-macos-arm64' }));
-  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_TAMPER: 'virgo-macos-arm64' }), 'checksum');
+  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_FAIL: cliAsset }));
+  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_TAMPER: cliAsset }), 'checksum');
   if (!beforeState.equals(await readFile(join(target.directory, 'installation-state.json')))) throw new Error('Failed upgrade modified the old installation.');
   success(command(virgo, ['upgrade','--mode','host','--machine','host'], env));
   await dispatch('successor', ['upgrade','--mode','host','--machine','host','--release',current.release,'--github-repository','virgo-codes/virgo-release']);
