@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { cliAsset, publishRelease } from './fixture-curl.js';
 
 // This is a caller-boundary acquisition test, with real Linux Bun and isolated
 // HTTPS fixtures. Supply the already verified publisher archive; no test fetch.
@@ -25,26 +26,25 @@ try {
   await writeFile(join(fixtures, 'launcher.js'), launcher);
   const dispatch = join(root, 'dispatch.json');
   const cli = Buffer.from(`await Bun.write(process.env.VIRGO_TEST_DISPATCH,JSON.stringify(process.argv.slice(2)));\n`);
-  await writeFile(join(fixtures, 'cli'), cli);
+  await writeFile(join(fixtures, 'current cli'), cli);
+  // Only the selected Linux release is published; a wrong selection finds no target.
+  const github = join(root, 'github api'); await publishRelease(github, release, cli);
   const linux = { platform: { os: 'linux', architecture: 'x64' }, release, cliSha256: sha(cli), operator: { release, cliSha256: sha(cli) } };
   const metadata = { sourceRepository: 'virgo-codes/virgo', launcherSha256: sha(launcher), platforms: [
     { ...linux, platform: { os: 'macos', architecture: 'arm64' }, release: other }, linux] };
   await writeFile(join(fixtures, 'current.json'), JSON.stringify(metadata));
-  const downloader = join(root, 'download.js');
-  await writeFile(downloader, `import{readFile,writeFile}from'node:fs/promises';import{join}from'node:path';
-const a=process.argv.slice(2),url=a.at(-3),out=a.at(-1);
-const file=url.endsWith('/current.json')?'current.json':url.endsWith('/launcher.js')?'launcher.js':url.endsWith('/bun-linux-x64.zip')?'bun.zip':url.endsWith('/release-${release}/virgo-linux-x64')?'cli':null;
-if(!file||a.at(-2)!=='--output')process.exit(94);
-let b=await readFile(join(process.env.VIRGO_TEST_FIXTURES,file));if(process.env.VIRGO_TEST_TAMPER===file)b=Buffer.concat([b,Buffer.from('tamper')]);await writeFile(out,b);\n`);
+  // The shared stub serves this runner's exact acquisition URLs and the fixture GitHub API (tests/fixture-curl.js).
+  const downloader = join(repository, 'tests', 'fixture-curl.js');
   await writeFile(join(bin, 'curl'), `#!/bin/bash\nexec ${quote(process.execPath)} ${quote(downloader)} "$@"\n`, { mode: 0o700 });
-  const env = { ...process.env, HOME: home, SHELL: '/bin/bash', PATH: `${bin}:/usr/bin:/bin`, VIRGO_TEST_FIXTURES: fixtures, VIRGO_TEST_DISPATCH: dispatch };
+  const env = { ...process.env, HOME: home, SHELL: '/bin/bash', PATH: `${bin}:/usr/bin:/bin`, VIRGO_TEST_FILES: fixtures, VIRGO_TEST_LAUNCHER: join(fixtures, 'launcher.js'),
+    VIRGO_TEST_GITHUB: github, VIRGO_TEST_DOWNLOAD_LOG: join(root, 'download.jsonl'), VIRGO_TEST_DISPATCH: dispatch };
   const run = (file, args, extra = {}, expected = 0) => {
     const result = spawnSync(file, args, { env: { ...env, ...extra }, encoding: 'utf8' });
     if (result.error || (expected === 0 ? result.status !== 0 : result.status === 0)) throw new Error(JSON.stringify(result));
     checks++; return result;
   };
   const installer = join(repository, 'install.sh'), virgo = join(home, '.local/bin/virgo');
-  run('/bin/bash', [installer], { VIRGO_TEST_TAMPER: 'cli' }, 1);
+  run('/bin/bash', [installer], { VIRGO_TEST_TAMPER: cliAsset }, 1);
   if (await stat(virgo).catch(() => null)) throw new Error('Failed acquisition published a command.');
   run('/bin/bash', [installer]);
   run(virgo, ['--help']);

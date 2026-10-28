@@ -1,4 +1,5 @@
-import { readFile, writeFile, appendFile, lstat, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile, appendFile, lstat, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // The one isolated HTTPS fixture behind the tests' stub `curl`. It serves only the
@@ -18,6 +19,41 @@ export const loginShell = platform?.os === 'linux' ? '/bin/bash' : '/bin/zsh';
 export const profileName = platform?.os === 'linux' ? '.bash_profile' : '.zprofile';
 export const supervisorDirectory = home => platform?.os === 'linux' ? join(home, '.config', 'systemd', 'user') : join(home, 'Library', 'LaunchAgents');
 const REPOSITORY = 'virgo-codes/virgo-release', BUN_VERSION = '1.3.14';
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+// Byte-identical to virgo distribution/local-distribution.ts:15-26 (canonical,
+// computeManifestDigest): localeCompare key order, version excluded, compatibility
+// bound only when present.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+export const manifestDigest = ({ release, artifacts, compatibility }) => sha(canonical({ release, artifacts, ...(compatibility === undefined ? {} : { compatibility }) }));
+/** An agent_host native archive whose bin/virgo is cliBytes, as an installed or published release carries it. */
+export function releaseArchive(release, cliBytes, descriptorRelease = release, archivePlatform = platform) {
+  const descriptor = Buffer.from(JSON.stringify({ release: descriptorRelease, adapterDirectory: 'adapters', daemonSupervision: { protocolVersion: 1, cliExecutable: 'bin/virgo' } }) + '\n');
+  return Buffer.from(JSON.stringify({ schemaVersion: 1, component: 'agent_host', release, platform: archivePlatform,
+    entries: [['bin/virgo', cliBytes], ['release.json', descriptor]].map(([path, bytes]) => ({ path, kind: 'file', mode: 0o755, digest: sha(bytes), content: bytes.toString('base64') })) }) + '\n');
+}
+/**
+ * Publish release R of the official repository under the fixture GitHub API root,
+ * with virgo's real names (build-release.ts:184; github-release.ts:159,195): tag
+ * `release-<R>`, manifest `<R>.json` and archive `<R>-<os>-<arch>.vra` whose https
+ * source is its browser asset URL. Asset ids derive from R so releases coexist.
+ * Returns the archive's API URL.
+ */
+export async function publishRelease(github, release, cliBytes) {
+  const at = join(github, ...REPOSITORY.split('/')), tag = `release-${release}`, name = `${release}-${platform.os}-${platform.architecture}.vra`;
+  const archiveBytes = releaseArchive(release, cliBytes), id = parseInt(release.slice(0, 8), 16) * 2;
+  const unsigned = { release, artifacts: [{ component: 'agent_host', release, platform, format: 'native_archive', digest: sha(archiveBytes),
+    source: { kind: 'https', url: `https://github.com/${REPOSITORY}/releases/download/${tag}/${name}` } }] };
+  const manifest = Buffer.from(JSON.stringify({ ...unsigned, version: '2.2.8', manifestDigest: manifestDigest(unsigned) }) + '\n');
+  await mkdir(join(at, 'tags'), { recursive: true }); await mkdir(join(at, 'assets'), { recursive: true });
+  await writeFile(join(at, 'tags', `${tag}.json`), JSON.stringify({ tag_name: tag, draft: false,
+    assets: [{ id: id + 1, name: `${release}.json`, size: manifest.length }, { id: id + 2, name, size: archiveBytes.length }] }));
+  await writeFile(join(at, 'assets', String(id + 1)), manifest); await writeFile(join(at, 'assets', String(id + 2)), archiveBytes);
+  return `https://api.github.com/repos/${REPOSITORY}/releases/assets/${id + 2}`;
+}
 
 if (import.meta.main) {
   const args = process.argv.slice(2), url = args.at(-3), out = args.at(-1), env = process.env;

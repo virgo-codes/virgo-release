@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { platform, bunPackage, cliAsset, loginShell, profileName, supervisorDirectory } from './fixture-curl.js';
+import { platform, bunPackage, cliAsset, loginShell, profileName, supervisorDirectory, publishRelease } from './fixture-curl.js';
 
 // Runs on macOS arm64, or on Linux x64 with VIRGO_TEST_BUN_ARCHIVE naming the
 // pinned Bun 1.3.14 zip (as tests/target-dispatch.test.js).
@@ -24,9 +24,9 @@ const launcherPath = join(fixtureDir, 'launcher.js');
 await writeFile(launcherPath, (await readFile(join(repository,'launcher.js'),'utf8')).replace(/const BUN_SHA = '[a-f0-9]+';/u, `const BUN_SHA = '${sha(await readFile(process.execPath))}';`));
 const assetPath = join(fixtureDir, 'current cli');
 const dispatchLog = join(root, 'dispatch.json');
-const downloadLog = join(root, 'download.jsonl');
+const downloadLog = join(root, 'download.jsonl'), github = join(root, 'github api');
 const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, SHELL: loginShell,
-  VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog };
+  VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_GITHUB: github, VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog };
 let fixtureHome;
 const cli = marker => `#!/unusable/interpreter\nif(process.env.VIRGO_TEST_EXPECT_EXECUTABLE&&await import('node:fs/promises').then(m=>m.realpath(process.execPath))!==process.env.VIRGO_TEST_EXPECT_EXECUTABLE){console.error('supervisor interpreter mismatch');process.exit(88);}
 await Bun.write(process.env.VIRGO_TEST_DISPATCH,JSON.stringify({marker:${JSON.stringify(marker)},args:process.argv.slice(2)}));\nconsole.log(JSON.stringify({ok:true,marker:${JSON.stringify(marker)}}));\nprocess.exit(Number(process.env.VIRGO_TEST_CLI_EXIT??0));\n`;
@@ -35,6 +35,8 @@ await writeFile(assetPath, cli('current'));
 const { platforms: _published, ...official } = await Bun.file(join(repository, 'current.json')).json();
 const current = { ...official, platform, release: newer, cliSha256: sha(await readFile(assetPath)), launcherSha256: sha(await readFile(launcherPath)), operator: {release: newer,cliSha256:sha(await readFile(assetPath))} };
 await writeFile(metadataPath, JSON.stringify(current));
+// Plain install/upgrade run the current release's own CLI from its official GitHub Release.
+await publishRelease(github, newer, await readFile(assetPath));
 const zip = join(fixtureDir, 'bun.zip');
 let installer = await readFile(join(repository, 'install.sh'), 'utf8');
 if (linux) {
@@ -120,7 +122,7 @@ try {
   for (const distro of ['--github-repository', '--manifest-directory', '--bundle']) {
     const args = ['upgrade', '--mode', 'host', '--machine', 'host', '--release', older, distro, distro === '--github-repository' ? 'virgo-codes/virgo-release' : join(root, 'recovery distribution')];
     const result = success(command(virgo, args, env)); await dispatch('current', args);
-    // Only the official repository consults its GitHub release; this fixture serves none.
+    // Only the official repository consults its GitHub release; this fixture publishes no release `older`.
     if (result.stderr.includes('target unavailable') !== (distro === '--github-repository')) throw new Error(`Unexpected target dispatch outcome for ${distro}: ${result.stderr}`);
   }
   const target = await installedFixture(join(root, 'old installed root'), older, 'old');
@@ -291,9 +293,11 @@ try {
     success(command(virgo, ['--help'], env));
   }
   // A new selected CLI fails download/checksum before caller dispatch, retaining the installed target.
+  // The plain path selects the current release's own GitHub archive, so its archive asset fails or is tampered.
   const changed = cli('successor'); await writeFile(assetPath, changed); current.release = 'c'.repeat(64); current.cliSha256 = sha(changed); current.operator={release:current.release,cliSha256:current.cliSha256}; await writeFile(metadataPath, JSON.stringify(current));
-  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_FAIL: cliAsset }));
-  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_TAMPER: cliAsset }), 'checksum');
+  const successorArchive = await publishRelease(github, current.release, Buffer.from(changed));
+  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_FAIL: successorArchive }), 'target unavailable');
+  rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_TAMPER: successorArchive }), 'integrity failed: GitHub Release archive hash differs from its manifest');
   if (!beforeState.equals(await readFile(join(target.directory, 'installation-state.json')))) throw new Error('Failed upgrade modified the old installation.');
   success(command(virgo, ['upgrade','--mode','host','--machine','host'], env));
   await dispatch('successor', ['upgrade','--mode','host','--machine','host','--release',current.release,'--github-repository','virgo-codes/virgo-release']);

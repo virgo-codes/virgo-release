@@ -4,13 +4,14 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { platform, bunPackage, cliAsset, loginShell, supervisorDirectory } from './fixture-curl.js';
+import { platform, bunPackage, cliAsset, loginShell, supervisorDirectory, manifestDigest, releaseArchive as archive } from './fixture-curl.js';
 
 // S289 (frozen spec 512c1f5a): only `upgrade --release R --github-repository
 // virgo-codes/virgo-release` runs R's own CLI, verified as virgo's GitHub
 // distribution verifies it. The installed release and the independent
 // current.operator stay pinned to a 2.2.1-class CLI which cannot decode a
 // receipt written by a later release, so only R's own checks can govern.
+// A plain upgrade (no --release) selects the channel's current release R the same way.
 // Runs on macOS arm64, or on Linux x64 with VIRGO_TEST_BUN_ARCHIVE naming the
 // pinned Bun 1.3.14 zip (as tests/linux-launcher.test.js).
 if (!platform) throw new Error('Run on macOS arm64 or Linux x64.');
@@ -89,20 +90,7 @@ async function dispatch(marker, args) {
 const downloads = async () => (await readFile(downloadLog, 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).trim().split('\n').filter(Boolean).map(line => JSON.parse(line).at(-3));
 const operatorDownloads = urls => urls.filter(url => url.endsWith('/current.json') || url.endsWith(`/${cliAsset}`));
 const apiDownloads = urls => urls.filter(url => url.startsWith('https://api.github.com/'));
-// Byte-identical to virgo distribution/local-distribution.ts:15-26 (canonical,
-// computeManifestDigest): localeCompare key order, version excluded, compatibility
-// bound only when present.
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
-  return JSON.stringify(value);
-}
-const manifestDigest = ({ release, artifacts, compatibility }) => sha(canonical({ release, artifacts, ...(compatibility === undefined ? {} : { compatibility }) }));
-function archive(release, cliBytes, descriptorRelease = release, archivePlatform = platform) {
-  const descriptor = Buffer.from(JSON.stringify({ release: descriptorRelease, adapterDirectory: 'adapters', daemonSupervision: { protocolVersion: 1, cliExecutable: 'bin/virgo' } }) + '\n');
-  return Buffer.from(JSON.stringify({ schemaVersion: 1, component: 'agent_host', release, platform: archivePlatform,
-    entries: [['bin/virgo', cliBytes], ['release.json', descriptor]].map(([path, bytes]) => ({ path, kind: 'file', mode: 0o755, digest: sha(bytes), content: bytes.toString('base64') })) }) + '\n');
-}
+// manifestDigest and archive are the shared fixture builders (tests/fixture-curl.js).
 const good = archive(target, targetCli);
 const browserUrl = (repo, name) => `https://github.com/${repo}/releases/download/${tag}/${name}`;
 /**
@@ -336,12 +324,49 @@ try {
   if ((await downloads()).length) throw new Error('Changed supervisor receipt downloaded the target.');
   await writeFile(installed.receiptPath, receipt, { mode: 0o600 });
 
-  // Point 5: without --release the official current operator remains the selection.
+  // Plain upgrade (fails on base, which ran the old current operator and refused
+  // with oldRefusal): the official channel's current release advances to R while
+  // its operator stays the old 2.2.1-class CLI. Without --release, the old Host
+  // selects the current target R through the same verified GitHub selection as an
+  // explicit --release and runs R's checksum-verified CLI with R's checks governing.
   const implicit = ['upgrade', '--mode', 'host', '--machine', 'isolated', '--root', installationRoot];
-  await reset();
-  rejected(command(virgo, implicit, pinned), oldRefusal);
-  await dispatch('old', [...implicit, '--release', older, '--github-repository', OFFICIAL]);
-  if (apiDownloads(await downloads()).length) throw new Error('Implicit upgrade fetched a target.');
-  await unchanged('Implicit upgrade');
-  console.log(`PASS: ${cases} explicit-target upgrade dispatch checks on ${platform.os} ${platform.architecture}; real wrapper/launcher/Bun, 2.2.1-class installed Host and operator, isolated fixtures, no live Hub/Host/provider effects.`);
+  const implicitArgs = [...implicit, '--release', target, '--github-repository', OFFICIAL];
+  const channel = await readFile(join(fixtureDir, 'current.json'));
+  const advanced = JSON.parse(channel);
+  advanced.platforms = advanced.platforms.map(entry => entry === advanced.platforms.at(-1) ? { ...entry, release: target, cliSha256: sha(targetCli) } : entry);
+  if (advanced.platforms.at(-1).operator.release !== older) throw new Error('Fixture moved the operator pin.');
+  await writeFile(join(fixtureDir, 'current.json'), JSON.stringify(advanced));
+  await publish(); await reset();
+  await rm(join(state, 'releases', sha(targetCli)), { recursive: true, force: true });
+  {
+    const result = success(command(virgo, implicit, pinned));
+    await dispatch('target', implicitArgs);
+    if (result.stderr.includes('could not be inspected') || JSON.parse(result.stdout).receipts !== 1) throw new Error(JSON.stringify(result));
+    const urls = await downloads();
+    if (urls.filter(url => url.endsWith('/current.json')).length !== 1 || urls.some(url => url.endsWith(`/${cliAsset}`)))
+      throw new Error(`Plain upgrade did not select the current target from the channel alone: ${JSON.stringify(urls)}`);
+    if (JSON.stringify(apiDownloads(urls)) !== JSON.stringify([metadataUrl, `https://api.github.com/repos/${OFFICIAL}/releases/assets/${MANIFEST_ID}`, `https://api.github.com/repos/${OFFICIAL}/releases/assets/${ARCHIVE_ID}`]))
+      throw new Error(`Plain upgrade target was not fetched as the GitHub verifier fetches it: ${JSON.stringify(urls)}`);
+    if (!targetCli.equals(await readFile(cachedCli))) throw new Error('Plain upgrade target CLI was not cached by its digest.');
+    await unchanged('Plain upgrade');
+  }
+  // No silent fallback: an unknown or unverifiable current target fails naming its
+  // cause; neither the old operator nor any CLI runs, and the Host is unchanged.
+  for (const [cause, published, extraEnv] of [
+    ['Download failed', {}, { VIRGO_TEST_FAIL: '/current.json' }],
+    ['target unavailable: GitHub Release metadata is unavailable.', {}, { VIRGO_TEST_FAIL: `/releases/tags/${tag}` }],
+    ['target unavailable: GitHub Release asset is unavailable.', {}, { VIRGO_TEST_FAIL: `/releases/assets/${ARCHIVE_ID}` }],
+    ['installed version kept, still working; integrity failed: Release manifest digest failed; the next upgrade run will retry', { digestOverride: '0'.repeat(64) }, {}],
+  ]) {
+    await publish(published); await reset();
+    await rm(join(state, 'releases', sha(targetCli)), { recursive: true, force: true });
+    const result = rejected(command(virgo, implicit, { ...pinned, ...extraEnv }), cause);
+    if (/refused|Continuing with the official operator/u.test(result.stderr)) throw new Error(`Plain upgrade fell back or refused: ${result.stderr}`);
+    if ((await dispatched()).length) throw new Error(`Unverified plain target (${cause}) executed a CLI.`);
+    if ((await downloads()).some(url => url.endsWith(`/${cliAsset}`))) throw new Error(`Plain upgrade (${cause}) fetched the operator CLI.`);
+    await absent(cachedCli, `Unverified plain target (${cause}) was cached.`);
+    await unchanged(`Plain upgrade failure (${cause})`);
+  }
+  await writeFile(join(fixtureDir, 'current.json'), channel);
+  console.log(`PASS: ${cases} explicit- and plain-target upgrade dispatch checks on ${platform.os} ${platform.architecture}; real wrapper/launcher/Bun, 2.2.1-class installed Host and operator, isolated fixtures, no live Hub/Host/provider effects.`);
 } finally { await rm(root, { recursive: true, force: true }); }
