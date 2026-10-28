@@ -4,6 +4,7 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { platform, bunPackage, cliAsset } from './fixture-curl.js';
 
 // S289 (frozen spec 512c1f5a): only `upgrade --release R --github-repository
 // virgo-codes/virgo-release` runs R's own CLI, verified as virgo's GitHub
@@ -12,13 +13,10 @@ import { spawnSync } from 'node:child_process';
 // receipt written by a later release, so only R's own checks can govern.
 // Runs on macOS arm64, or on Linux x64 with VIRGO_TEST_BUN_ARCHIVE naming the
 // pinned Bun 1.3.14 zip (as tests/linux-launcher.test.js).
-const platform = process.platform === 'darwin' && process.arch === 'arm64' ? { os: 'macos', architecture: 'arm64' }
-  : process.platform === 'linux' && process.arch === 'x64' ? { os: 'linux', architecture: 'x64' } : null;
 if (!platform) throw new Error('Run on macOS arm64 or Linux x64.');
 const linux = platform.os === 'linux';
 if (linux && !process.env.VIRGO_TEST_BUN_ARCHIVE) throw new Error('On Linux x64, set VIRGO_TEST_BUN_ARCHIVE to the pinned Bun 1.3.14 zip.');
 const foreign = linux ? { os: 'macos', architecture: 'arm64' } : { os: 'linux', architecture: 'x64' };
-const bunPackage = linux ? 'bun-linux-x64' : 'bun-darwin-aarch64', cliAsset = `virgo-${platform.os}-${platform.architecture}`;
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const root = await mkdtemp(join(await realpath(tmpdir()), 'virgo-target-dispatch-'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -47,7 +45,7 @@ if (linux) {
 await writeFile(launcherPath, launcher);
 const installerPath = join(fixtureDir, 'install.sh'); await writeFile(installerPath, installer);
 const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, SHELL: linux ? '/bin/bash' : '/bin/zsh', VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_GITHUB: github,
-  VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog, VIRGO_TEST_BUN_PACKAGE: bunPackage, VIRGO_TEST_CLI_ASSET: cliAsset };
+  VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog };
 // A fixture CLI appends every execution to the dispatch log, then decodes the
 // selected Host's provider replacement receipts up to its own schema, exactly
 // where the product's preflight refuses.
@@ -69,28 +67,11 @@ await writeFile(assetPath, oldCli);
 const pin = { version: '2.0.1', platform, release: older, cliSha256: sha(oldCli), operator: { release: older, cliSha256: sha(oldCli) } };
 await writeFile(join(fixtureDir, 'current.json'), JSON.stringify({ sourceRepository: 'virgo-codes/virgo', launcherSha256: sha(Buffer.from(launcher)),
   platforms: [{ ...pin, platform: foreign, release: 'b'.repeat(64) }, pin] }));
-// The fixture GitHub API serves <repo>/tags/<tag>.json for releases/tags/<tag>
-// and <repo>/assets/<id> for releases/assets/<id>, each only under its exact
-// Accept header (github-release.ts:182,189). A `.first` variant is served once.
-const downloader = join(root, 'download.js');
-await writeFile(downloader, `import{readFile,writeFile,appendFile,lstat,rm}from'node:fs/promises';import{join}from'node:path';
-const args=process.argv.slice(2),url=args.at(-3),out=args.at(-1),env=process.env;await appendFile(env.VIRGO_TEST_DOWNLOAD_LOG,JSON.stringify(args)+'\\n');
-if(args.at(-2)!=='--output'||!url.startsWith('https://'))process.exit(93);
-if(env.VIRGO_TEST_FAIL&&url.includes(env.VIRGO_TEST_FAIL))process.exit(23);
-const exists=path=>lstat(path).then(()=>true,()=>false);
-const header=name=>{const values=[];for(let i=0;i<args.length;i++)if(args[i]==='--header'&&args[i+1]?.toLowerCase().startsWith(name+':'))values.push(args[i+1].slice(name.length+1).trim());return values;};
-const api=/^https:\\/\\/api\\.github\\.com\\/repos\\/([A-Za-z0-9._-]+)\\/([A-Za-z0-9._-]+)\\/releases\\/(tags|assets)\\/([A-Za-z0-9._-]+)$/u.exec(url);
-let source=null;
-if(api){
- const accept=api[3]==='tags'?'application/vnd.github+json':'application/octet-stream';
- if(JSON.stringify(header('accept'))!==JSON.stringify([accept]))process.exit(95);
- const path=join(env.VIRGO_TEST_GITHUB,api[1],api[2],api[3],api[3]==='tags'?api[4]+'.json':api[4]);
- if(await exists(path+'.first')){await writeFile(out,await readFile(path+'.first'));await rm(path+'.first');process.exit(0);}
- if(!await exists(path))process.exit(22);
- source=path;
-}
-source??=url.endsWith('/current.json')?join(env.VIRGO_TEST_FILES,'current.json'):url.endsWith('/launcher.js')?env.VIRGO_TEST_LAUNCHER:url.endsWith('/'+env.VIRGO_TEST_BUN_PACKAGE+'.zip')?join(env.VIRGO_TEST_FILES,'bun.zip'):url.endsWith('/'+env.VIRGO_TEST_CLI_ASSET)?join(env.VIRGO_TEST_FILES,'current cli'):null;
-if(!source)process.exit(94);await writeFile(out,await readFile(source));`);
+// The shared stub (tests/fixture-curl.js) serves the fixture GitHub API from
+// VIRGO_TEST_GITHUB: <repo>/tags/<tag>.json for releases/tags/<tag> and
+// <repo>/assets/<id> for releases/assets/<id>, each only under its exact Accept
+// header (github-release.ts:182,189). A `.first` variant is served once.
+const downloader = join(repository, 'tests', 'fixture-curl.js');
 await writeFile(join(bin, 'curl'), `#!/bin/bash\nexec ${shellQuote(process.execPath)} ${shellQuote(downloader)} "$@"\n`, { mode: 0o700 });
 await writeFile(join(bin, 'gh'), '#!/bin/bash\nexit 91\n', { mode: 0o700 });
 
