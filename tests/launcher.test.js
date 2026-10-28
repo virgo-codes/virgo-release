@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { platform, bunPackage, cliAsset } from './fixture-curl.js';
+import { platform, bunPackage, cliAsset, loginShell, profileName, supervisorDirectory } from './fixture-curl.js';
 
 // Runs on macOS arm64, or on Linux x64 with VIRGO_TEST_BUN_ARCHIVE naming the
 // pinned Bun 1.3.14 zip (as tests/target-dispatch.test.js).
@@ -25,7 +25,7 @@ await writeFile(launcherPath, (await readFile(join(repository,'launcher.js'),'ut
 const assetPath = join(fixtureDir, 'current cli');
 const dispatchLog = join(root, 'dispatch.json');
 const downloadLog = join(root, 'download.jsonl');
-const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, SHELL: '/bin/zsh',
+const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, SHELL: loginShell,
   VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog };
 let fixtureHome;
 const cli = marker => `#!/unusable/interpreter\nif(process.env.VIRGO_TEST_EXPECT_EXECUTABLE&&await import('node:fs/promises').then(m=>m.realpath(process.execPath))!==process.env.VIRGO_TEST_EXPECT_EXECUTABLE){console.error('supervisor interpreter mismatch');process.exit(88);}
@@ -68,7 +68,7 @@ async function installedFixture(installationRoot, release, marker, instance = 'h
   const target = { machine: 'isolated', component: 'agent_host', instance };
   const directory = join(installationRoot, 'instances', encodeURIComponent(`${target.machine}\0agent_host\0${instance}`));
   const descriptor = Buffer.from(JSON.stringify({ release, adapterDirectory: 'adapters', daemonSupervision: { protocolVersion: 1, cliExecutable: 'bin/virgo' } })+'\n');
-  const archive = { schemaVersion: 1, component: 'agent_host', release, platform: { os: 'macos', architecture: 'arm64' },
+  const archive = { schemaVersion: 1, component: 'agent_host', release, platform,
     entries: [['bin/virgo', cliBytes], ['release.json', descriptor]].map(([path, bytes]) => ({ path, kind: 'file', mode: 0o755, digest: sha(bytes), content: bytes.toString('base64') })) };
   const archiveBytes = Buffer.from(JSON.stringify(archive)+'\n'), digest = sha(archiveBytes);
   const releaseDirectory = join(installationRoot, 'releases', `${release}-${digest}`), handle = join(installationRoot, 'cache', digest);
@@ -83,7 +83,7 @@ async function installedFixture(installationRoot, release, marker, instance = 'h
   const registration = join(installationRoot, 'processes', 'supervision', 'registration');
   await mkdir(registration, { recursive: true, mode: 0o700 });
   const receipt = { schemaVersion: 1, root: installationRoot, releaseDirectory, cli: join(releaseDirectory, 'bin', 'virgo'), cliDigest: sha(cliBytes),
-    executable, executableIdentity: `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`, launchAgentsDirectory: join(fixtureHome, 'Library', 'LaunchAgents'), intervalSeconds: 5 };
+    executable, executableIdentity: `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`, launchAgentsDirectory: supervisorDirectory(fixtureHome), intervalSeconds: 5 };
   const receiptPath = join(registration, 'supervisor.json');
   await writeFile(receiptPath, JSON.stringify(receipt), { mode: 0o600 });
   return { directory, releaseDirectory, handle, executable, receipt, receiptPath };
@@ -92,21 +92,21 @@ async function installedFixture(installationRoot, release, marker, instance = 'h
 try {
   const coldHome = join(root, 'interrupted first acquisition'); await mkdir(coldHome);
   rejected(command('/bin/bash', [installerPath], { ...environment, HOME: coldHome, VIRGO_TEST_TAMPER: cliAsset }));
-  for (const missing of [join(coldHome,'.local','bin','virgo'),join(coldHome,'.zprofile')]) {
+  for (const missing of [join(coldHome,'.local','bin','virgo'),join(coldHome,profileName)]) {
     try { await readFile(missing); throw new Error('Failed cold acquisition published a partial command/profile.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   success(command('/bin/bash', [installerPath], { ...environment, HOME: coldHome }));
-  success(command('/bin/zsh', ['-l','-c','virgo --help'], { ...environment, HOME: coldHome }));
+  success(command(loginShell, ['-l','-c','virgo --help'], { ...environment, HOME: coldHome }));
   const home = join(root, 'fresh user with spaces'); await mkdir(home);
   fixtureHome = home;
   const env = { ...environment, HOME: home }, virgo = join(home, '.local', 'bin', 'virgo');
-  await writeFile(join(home, '.zprofile'), '# retained operator profile\nexport RETAINED_VIRGO_TEST=yes\n');
+  await writeFile(join(home, profileName), '# retained operator profile\nexport RETAINED_VIRGO_TEST=yes\n');
   if (command('/bin/bash', ['-c', 'command -v bun'], env).status === 0) throw new Error('Fixture unexpectedly has external Bun.');
   success(command('/bin/bash', [installerPath], env));
-  const profile = await readFile(join(home, '.zprofile'), 'utf8');
+  const profile = await readFile(join(home, profileName), 'utf8');
   if (!profile.startsWith('# retained operator profile\nexport RETAINED_VIRGO_TEST=yes\n') || !profile.includes('# Virgo public command')) throw new Error('Profile content was not preserved.');
   // The new login shell loads the actual generated profile; no PATH export is taught to the user.
-  success(command('/bin/zsh', ['-l', '-c', 'command -v virgo; virgo --help'], env));
+  success(command(loginShell, ['-l', '-c', 'command -v virgo; virgo --help'], env));
   success(command(virgo, ['--help'], env));
   success(command(virgo, ['install', '--mode', 'local', '--machine', 'local', '--root', join(root, 'install root')], env));
   await dispatch('current', ['install', '--mode', 'local', '--machine', 'local', '--root', join(root, 'install root'), '--release', newer, '--github-repository', 'virgo-codes/virgo-release']);
@@ -160,7 +160,14 @@ try {
   const pendingNegative = join(root, 'bb1-pending-negative.js');
   const bb1 = spawnSync('git', ['show', 'bb1e2d68d2b04a997efc2695272ce8755e7dee2d:launcher.js'], { cwd: repository, encoding: 'utf8' });
   if (bb1.status !== 0) throw new Error('Missing exact reviewed pending negative control.');
-  await writeFile(pendingNegative, bb1.stdout.replace(/const BUN_SHA = '[a-f0-9]+';/u, `const BUN_SHA = '${sha(await readFile(process.execPath))}';`));
+  // bb1e2d6 pins one runtime hash; on Linux that is the configured pinned Linux Bun (launcher.js:14).
+  const bb1Runtime = linux ? '9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf983190cea6d715be2ad74' : sha(await readFile(process.execPath));
+  await writeFile(pendingNegative, bb1.stdout.replace(/const BUN_SHA = '[a-f0-9]+';/u, `const BUN_SHA = '${bb1Runtime}';`));
+  // Both historical launchers accept only macOS arm64 metadata and installed
+  // artifacts (7441a5e metadata()/installedCLI(); bb1e2d6 :67,:114). On Linux they
+  // refuse the runner's own fixtures before any dispatch, so each control there
+  // asserts that platform refusal and that nothing ran, instead of its macOS outcome.
+  const historicalRefusal = args => ['install', 'upgrade'].includes(args[0]) ? 'Official current metadata is invalid' : 'Installation receipt and selected release differ';
 
   await writeFile(originalLauncher, old.stdout);
   for (const [installed, installationRoot, mode] of [[target, selectedRoot, 'host'],
@@ -173,7 +180,7 @@ try {
         ...(mode === 'local' ? ['--manifest-directory',join(installationRoot,'cache')] : [])] ];
     for (const args of operations) {
       await rm(dispatchLog, { force: true });
-      rejected(command(process.execPath,[originalLauncher,...args],pinnedEnv),'interpreter mismatch');
+      rejected(command(process.execPath,[originalLauncher,...args],pinnedEnv),linux?historicalRefusal(args):'interpreter mismatch');
       try { await readFile(dispatchLog); throw new Error('Old launcher wrote despite interpreter mismatch.'); } catch(error) { if(error.code!=='ENOENT')throw error; }
       success(command(virgo,args,pinnedEnv));
       await dispatch(['install','upgrade'].includes(args[0])?'current':mode==='host'?'old':'local-pin',
@@ -184,8 +191,14 @@ try {
     const transition = join(dirname(installed.receiptPath), 'runtime-transition.json');
     const planId = 'd'.repeat(64);
     await writeFile(transition, JSON.stringify({ planId }), { mode: 0o600 });
-    success(command(installed.executable, [pendingNegative, ...operations[0]], pinnedEnv));
-    await dispatch(mode === 'host' ? 'old' : 'local-pin', operations[0]);
+    if (linux) {
+      await rm(dispatchLog, { force: true });
+      rejected(command(installed.executable, [pendingNegative, ...operations[0]], pinnedEnv), historicalRefusal(operations[0]));
+      try { await readFile(dispatchLog); throw new Error('Historical launcher dispatched a Linux installation.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    } else {
+      success(command(installed.executable, [pendingNegative, ...operations[0]], pinnedEnv));
+      await dispatch(mode === 'host' ? 'old' : 'local-pin', operations[0]);
+    }
 
     for (const args of [...operations, ['--directory', installed.directory, 'host', 'stop'],
         ['--directory', installed.directory, 'host', 'runtime', 'prepare'],
@@ -238,6 +251,8 @@ try {
     await writeFile(replacementPath,JSON.stringify({schemaVersion:1,before:installed.receipt,after:{...installed.receipt,executable:process.execPath}})); await refuse(); await rm(replacementPath);
     if(!before.equals(await readFile(installed.receiptPath)))throw new Error('Delegation changed registration.');
   }
+  // A prior Homebrew/Linuxbrew-style runtime under a group-writable Cellar ancestor; the
+  // historical-interpreter checks (launcher.js:298-307) are the same on both platforms.
   const legacy = await installedFixture(join(root,'cellar registration root'),older,'legacy');
   const priorRuntime = join(root,'prior cellar','bun'); await mkdir(dirname(priorRuntime),{recursive:true}); await chmod(dirname(priorRuntime),0o775); await copyFile(process.execPath,priorRuntime); await chmod(priorRuntime,0o755);
   const info=await lstat(priorRuntime), oldReceipt={...legacy.receipt,executable:priorRuntime,executableIdentity:`${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`};
@@ -269,10 +284,10 @@ try {
     await rm(downloadLog, { force: true }); rejected(command(virgo, args, env));
     try { await readFile(downloadLog); throw new Error('Malformed operation downloaded before validation.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  const oldWrapper = await readFile(virgo), oldProfile = await readFile(join(home, '.zprofile'));
+  const oldWrapper = await readFile(virgo), oldProfile = await readFile(join(home, profileName));
   for (const behavior of [{ VIRGO_TEST_FAIL: `${bunPackage}.zip` }, { VIRGO_TEST_TAMPER: 'launcher.js' }, { VIRGO_TEST_TAMPER: `${bunPackage}.zip` }, { VIRGO_TEST_INTERRUPT: `${bunPackage}.zip` }]) {
     rejected(command('/bin/bash', [installerPath], { ...env, ...behavior }));
-    if (!oldWrapper.equals(await readFile(virgo)) || !oldProfile.equals(await readFile(join(home, '.zprofile')))) throw new Error('Failed acquisition replaced the previous command/profile.');
+    if (!oldWrapper.equals(await readFile(virgo)) || !oldProfile.equals(await readFile(join(home, profileName)))) throw new Error('Failed acquisition replaced the previous command/profile.');
     success(command(virgo, ['--help'], env));
   }
   // A new selected CLI fails download/checksum before caller dispatch, retaining the installed target.
@@ -286,8 +301,8 @@ try {
   const forwarded = command(virgo, ['install','--machine','exit-test'], { ...env, VIRGO_TEST_CLI_EXIT: '7' });
   if (forwarded.status !== 7) throw new Error('CLI exit status changed.'); cases++;
   success(command('/bin/bash', [installerPath], env));
-  if (!oldProfile.equals(await readFile(join(home, '.zprofile')))) throw new Error('Repeat acquisition duplicated profile content.');
-  success(command('/bin/zsh', ['-l','-c','virgo --help'], env));
+  if (!oldProfile.equals(await readFile(join(home, profileName)))) throw new Error('Repeat acquisition duplicated profile content.');
+  success(command(loginShell, ['-l','-c','virgo --help'], env));
   const concurrentHome=join(root,'concurrent cold acquisition');await mkdir(concurrentHome);
   const parallel=()=>new Promise((done,reject)=>{const child=spawn('/bin/bash',[installerPath],{env:{...environment,HOME:concurrentHome},stdio:['ignore','pipe','pipe']});let stderr='';child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('exit',status=>done({status,stderr}));});
   const attempts=await Promise.all([parallel(),parallel()]);

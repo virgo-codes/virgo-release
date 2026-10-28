@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { platform, bunPackage, cliAsset } from './fixture-curl.js';
+import { platform, bunPackage, cliAsset, loginShell, supervisorDirectory } from './fixture-curl.js';
 
 // S289 (frozen spec 512c1f5a): only `upgrade --release R --github-repository
 // virgo-codes/virgo-release` runs R's own CLI, verified as virgo's GitHub
@@ -44,7 +44,7 @@ if (linux) {
 }
 await writeFile(launcherPath, launcher);
 const installerPath = join(fixtureDir, 'install.sh'); await writeFile(installerPath, installer);
-const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, SHELL: linux ? '/bin/bash' : '/bin/zsh', VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_GITHUB: github,
+const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, SHELL: loginShell, VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_GITHUB: github,
   VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog };
 // A fixture CLI appends every execution to the dispatch log, then decodes the
 // selected Host's provider replacement receipts up to its own schema, exactly
@@ -160,7 +160,7 @@ async function installedFixture(home, installationRoot, release, cliBytes) {
   const receiptPath = join(registration, 'supervisor.json');
   await writeFile(receiptPath, JSON.stringify({ schemaVersion: 1, root: installationRoot, releaseDirectory, cli: join(releaseDirectory, 'bin', 'virgo'), cliDigest: sha(cliBytes),
     executable, executableIdentity: `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`,
-    launchAgentsDirectory: linux ? join(home, '.config', 'systemd', 'user') : join(home, 'Library', 'LaunchAgents'), intervalSeconds: 5 }), { mode: 0o600 });
+    launchAgentsDirectory: supervisorDirectory(home), intervalSeconds: 5 }), { mode: 0o600 });
   // A later release's prepared provider replacement receipt the 2.2.1-class CLI cannot decode.
   const receipts = join(directory, '.provider-replacements'); await mkdir(receipts, { mode: 0o700 });
   const journal = join(receipts, `${'1'.repeat(8)}-1111-1111-1111-${'1'.repeat(12)}.json`);
