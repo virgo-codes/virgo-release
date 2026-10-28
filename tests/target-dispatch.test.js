@@ -286,13 +286,14 @@ try {
   // Point 3(b) RULED/7: integrity-class failures never execute anything: the bad
   // artifact is discarded (not cached), re-fetched with bounded backoff, the
   // installed verified release is left working and untouched, no operator upgrade
-  // runs, and the result is "integrity retrying" naming the failed check, never "refused".
+  // runs, and the result states the installed version is kept with the failed check, never "refused".
   const integrityClass = async (cause, published) => {
     await publish(published); await reset();
     await rm(join(state, 'releases', sha(targetCli)), { recursive: true, force: true });
     const before = await readdir(join(state, 'releases'));
     const result = command(virgo, upgrade(official), pinned);
-    if (result.status !== 75 || !result.stderr.includes('integrity retrying') || !result.stderr.includes(cause)) throw new Error(`Integrity failure (${cause}) was not reported: ${JSON.stringify(result)}`);
+    const kept = `installed version kept, still working; integrity failed: ${cause.replace(/\.$/u, '')}; the next upgrade run will retry`;
+    if (result.status !== 75 || !result.stderr.split('\n').includes(`virgo: ${kept}`)) throw new Error(`Integrity failure (${cause}) was not reported: ${JSON.stringify(result)}`);
     if (/refused|target unavailable/u.test(result.stderr)) throw new Error(`Integrity failure (${cause}) was reported as a refusal or fetch failure: ${result.stderr}`);
     cases++;
     if ((await dispatched()).length) throw new Error(`Integrity failure (${cause}) executed a CLI: ${JSON.stringify(await dispatched())}`);

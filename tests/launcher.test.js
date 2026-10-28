@@ -111,7 +111,9 @@ try {
   success(command(virgo, ['upgrade', '--mode', 'local', '--machine', 'local'], env));
   for (const distro of ['--github-repository', '--manifest-directory', '--bundle']) {
     const args = ['upgrade', '--mode', 'host', '--machine', 'host', '--release', older, distro, distro === '--github-repository' ? 'virgo-codes/virgo-release' : join(root, 'recovery distribution')];
-    success(command(virgo, args, env)); await dispatch('current', args);
+    const result = success(command(virgo, args, env)); await dispatch('current', args);
+    // Only the official repository consults its GitHub release; this fixture serves none.
+    if (result.stderr.includes('target unavailable') !== (distro === '--github-repository')) throw new Error(`Unexpected target dispatch outcome for ${distro}: ${result.stderr}`);
   }
   const target = await installedFixture(join(root, 'old installed root'), older, 'old');
   const installedArgs = ['--directory', target.directory, 'agent', 'status', 'vsp:/example:space/repo/lead', '--value', 'literal $(touch never-run) `quoted` *'];
