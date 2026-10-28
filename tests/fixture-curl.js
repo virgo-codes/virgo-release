@@ -22,6 +22,8 @@ const REPOSITORY = 'virgo-codes/virgo-release', BUN_VERSION = '1.3.14';
 if (import.meta.main) {
   const args = process.argv.slice(2), url = args.at(-3), out = args.at(-1), env = process.env;
   await appendFile(env.VIRGO_TEST_DOWNLOAD_LOG, JSON.stringify(args) + '\n');
+  // Optional copy for an outer CI harness, which outlives the per-fixture log.
+  if (env.VIRGO_TEST_DOWNLOAD_ARCHIVE) await appendFile(env.VIRGO_TEST_DOWNLOAD_ARCHIVE, JSON.stringify(args) + '\n');
   if (args.at(-2) !== '--output' || !url.startsWith('https://')) process.exit(93);
   if (env.VIRGO_TEST_FAIL && url.includes(env.VIRGO_TEST_FAIL)) process.exit(23);
   if (env.VIRGO_TEST_INTERRUPT && url.includes(env.VIRGO_TEST_INTERRUPT)) { process.kill(process.ppid, 'SIGTERM'); process.exit(143); }
