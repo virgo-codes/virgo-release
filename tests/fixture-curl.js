@@ -12,6 +12,11 @@ export const platform = process.platform === 'darwin' && process.arch === 'arm64
   : process.platform === 'linux' && process.arch === 'x64' ? { os: 'linux', architecture: 'x64' } : null;
 export const bunPackage = platform?.os === 'linux' ? 'bun-linux-x64' : 'bun-darwin-aarch64';
 export const cliAsset = platform && `virgo-${platform.os}-${platform.architecture}`;
+// The login shell and profile install.sh configures for it (install.sh:122-125),
+// and the supervisor directory launcher.js pins (launcher.js:282).
+export const loginShell = platform?.os === 'linux' ? '/bin/bash' : '/bin/zsh';
+export const profileName = platform?.os === 'linux' ? '.bash_profile' : '.zprofile';
+export const supervisorDirectory = home => platform?.os === 'linux' ? join(home, '.config', 'systemd', 'user') : join(home, 'Library', 'LaunchAgents');
 const REPOSITORY = 'virgo-codes/virgo-release', BUN_VERSION = '1.3.14';
 
 if (import.meta.main) {
