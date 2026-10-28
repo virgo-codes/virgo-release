@@ -156,7 +156,25 @@ is the Host CLI's existing verified preview-bundle path. An incomplete explicit
 selection is rejected before download. Quote each path; options use unique
 `--name value` pairs and preserve argument boundaries.
 
-The selected runtime is Virgo `2.0.1`, built from the source identity in
+After a published launcher change, repeat the official acquisition command above;
+the existing `virgo` entry pins its acquired launcher package and does not silently
+replace it. For the published 2.2.9 target, use the refreshed literal command:
+
+```sh
+virgo upgrade --mode host --machine <machine-id> --root "$HOME/virgo" \
+  --release 31345195943c307bc0bbe71b24f31a90622aad623e50c5ff0b5dbbdfeef2868d \
+  --github-repository virgo-codes/virgo-release
+```
+
+Retain the original `--instance` when it is not `host`. An explicit target in the
+official GitHub repository runs that target's authenticated CLI before the older
+operator can inspect its provider replacement receipts. The independent operator
+pins and installed receipts remain unchanged. Default upgrade selection without
+`--release` remains a separate follow-up; the command above makes the requested
+target explicit. A missing target or integrity failure must be reported as such;
+this documentation does not claim a successful lifecycle or allow private edits.
+
+The selected runtime is Virgo `2.2.9`, built from the source identity in
 `current.json`. GitHub tags are `release-<release hash>`; Virgo's release ID is
 the 64-character source-content hash. The underlying CLI remains a bundled Bun
 script; the supplied private runtime keeps that implementation detail inside the
