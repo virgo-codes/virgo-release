@@ -29,6 +29,14 @@ const environment = { ...process.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbi
   VIRGO_TEST_FILES: fixtureDir, VIRGO_TEST_LAUNCHER: launcherPath, VIRGO_TEST_DISPATCH: dispatchLog, VIRGO_TEST_DOWNLOAD_LOG: downloadLog };
 let fixtureHome;
 const cli = marker => `#!/unusable/interpreter\nif(process.env.VIRGO_TEST_EXPECT_EXECUTABLE&&await import('node:fs/promises').then(m=>m.realpath(process.execPath))!==process.env.VIRGO_TEST_EXPECT_EXECUTABLE){console.error('supervisor interpreter mismatch');process.exit(88);}
+let bridgeKind=null;
+if(process.env.VIRGO_TEST_RUN_PRODUCT_BRIDGE==='1'){
+ const{refreshOfficialLauncher,LAUNCHER_REFRESH_PENDING}=await import(process.env.VIRGO_TEST_PRODUCT_REFRESH_HELPER);
+ const refresh=await refreshOfficialLauncher('bridge',process.env.VIRGO_TEST_BOUND_LAUNCHER_SHA);bridgeKind=refresh.kind;
+ if(refresh.kind==='cancelled'||refresh.kind==='unsafe')process.exit(refresh.exitCode??1);
+ if(refresh.kind==='pending')console.error(LAUNCHER_REFRESH_PENDING);
+}
+if(process.env.VIRGO_TEST_EFFECT_LOG)await import('node:fs/promises').then(m=>m.appendFile(process.env.VIRGO_TEST_EFFECT_LOG,JSON.stringify({marker:${JSON.stringify(marker)},args:process.argv.slice(2),guard:process.env.VIRGO_LAUNCHER_REFRESH_ONCE??null,bridgeKind})+'\\n'));
 await Bun.write(process.env.VIRGO_TEST_DISPATCH,JSON.stringify({marker:${JSON.stringify(marker)},args:process.argv.slice(2)}));\nconsole.log(JSON.stringify({ok:true,marker:${JSON.stringify(marker)}}));\nprocess.exit(Number(process.env.VIRGO_TEST_CLI_EXIT??0));\n`;
 await writeFile(assetPath, cli('current'));
 // A single-platform channel for this runner; the published per-platform selection is not a fixture.
@@ -97,6 +105,14 @@ try {
   }
   success(command('/bin/bash', [installerPath], { ...environment, HOME: coldHome }));
   success(command(loginShell, ['-l','-c','virgo --help'], { ...environment, HOME: coldHome }));
+  // A caller-made refresh hint cannot bypass the stable entry's module hash.
+  const coldPackages=(await readdir(join(coldHome,'.local/share/virgo/launcher/packages'))).filter(name=>name.startsWith('package-'));
+  if(coldPackages.length!==1)throw Error('Unexpected cold acquisition custody.');
+  const coldModule=join(coldHome,'.local/share/virgo/launcher/packages',coldPackages[0],'launcher.js'),coldBytes=await readFile(coldModule);
+  await writeFile(coldModule,Buffer.concat([coldBytes,Buffer.from('\n// corrupted module\n')]));
+  rejected(command(join(coldHome,'.local/bin/virgo'),['--help'],{...environment,HOME:coldHome,VIRGO_LAUNCHER_REFRESH_ONCE:'1'}),'launcher checksum');
+  await writeFile(coldModule,coldBytes);
+
   const home = join(root, 'fresh user with spaces'); await mkdir(home);
   fixtureHome = home;
   const env = { ...environment, HOME: home }, virgo = join(home, '.local', 'bin', 'virgo');
@@ -108,6 +124,30 @@ try {
   // The new login shell loads the actual generated profile; no PATH export is taught to the user.
   success(command(loginShell, ['-l', '-c', 'command -v virgo; virgo --help'], env));
   success(command(virgo, ['--help'], env));
+  // Profile shape is checked before stable-entry publication, without changing the old entry.
+  const profilePath=join(home,profileName), profileBackup=join(home,profileName+'.verified-backup');
+  const oldEntry=await readFile(virgo),oldEntryInfo=await lstat(virgo),validProfile=await readFile(profilePath);
+  for(const kind of ['directory','unreadable','symlink']){
+    await rename(profilePath,profileBackup);
+    try{
+      if(kind==='directory')await mkdir(profilePath,{mode:0o700});
+      else if(kind==='symlink')await symlink(profileBackup,profilePath);
+      else{await writeFile(profilePath,'# unreadable owned profile\n',{mode:0o600});await chmod(profilePath,0);}
+      const before=await lstat(profilePath);
+      rejected(command('/bin/bash',[installerPath],env),'shell profile');
+      const after=await lstat(profilePath),entryAfter=await lstat(virgo);
+      if(after.ino!==before.ino||after.mode!==before.mode||after.size!==before.size||after.mtimeMs!==before.mtimeMs||entryAfter.ino!==oldEntryInfo.ino||!oldEntry.equals(await readFile(virgo)))throw Error(`Invalid ${kind} profile changed current profile or entry.`);
+      if(kind==='directory'&&(await readdir(profilePath)).length)throw Error('Profile temporary was moved into an invalid directory.');
+    }finally{if(kind==='unreadable')await chmod(profilePath,0o600);await rm(profilePath,{recursive:true,force:true});await rename(profileBackup,profilePath);}
+  }
+  // A failed final rename leaves a valid refresh profile and current wrapper untouched.
+  const renameBin=join(root,'fail-final-wrapper-rename');await mkdir(renameBin);
+  await writeFile(join(renameBin,'mv'),`#!/bin/bash\nfor destination;do :;done\nif [[ "$destination" == "$VIRGO_TEST_REJECT_WRAPPER" ]];then exit 91;fi\nexec /bin/mv "$@"\n`,{mode:0o700});
+  const profileBeforeRename=await lstat(profilePath);
+  rejected(command('/bin/bash',[installerPath],{...env,PATH:renameBin+':'+env.PATH,VIRGO_TEST_REJECT_WRAPPER:virgo}));
+  const profileAfterRename=await lstat(profilePath),entryAfterRename=await lstat(virgo);
+  if(profileAfterRename.ino!==profileBeforeRename.ino||profileAfterRename.mtimeMs!==profileBeforeRename.mtimeMs||profileAfterRename.mode!==profileBeforeRename.mode||!validProfile.equals(await readFile(profilePath))||entryAfterRename.ino!==oldEntryInfo.ino||!oldEntry.equals(await readFile(virgo)))throw Error('Final wrapper rename failure changed a valid current profile or entry.');
+  success(command(virgo,['--help'],env));
   success(command(virgo, ['install', '--mode', 'local', '--machine', 'local', '--root', join(root, 'install root')], env));
   await dispatch('current', ['install', '--mode', 'local', '--machine', 'local', '--root', join(root, 'install root'), '--release', newer, '--github-repository', 'virgo-codes/virgo-release']);
   const quoted = join(root, 'root $(touch never-run) `quoted` *');
@@ -285,11 +325,32 @@ try {
     try { await readFile(downloadLog); throw new Error('Malformed operation downloaded before validation.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   const oldWrapper = await readFile(virgo), oldProfile = await readFile(join(home, profileName));
-  for (const behavior of [{ VIRGO_TEST_FAIL: `${bunPackage}.zip` }, { VIRGO_TEST_TAMPER: 'launcher.js' }, { VIRGO_TEST_TAMPER: `${bunPackage}.zip` }, { VIRGO_TEST_INTERRUPT: `${bunPackage}.zip` }]) {
-    rejected(command('/bin/bash', [installerPath], { ...env, ...behavior }));
-    if (!oldWrapper.equals(await readFile(virgo)) || !oldProfile.equals(await readFile(join(home, profileName)))) throw new Error('Failed acquisition replaced the previous command/profile.');
-    success(command(virgo, ['--help'], env));
+  rejected(command('/bin/bash', [installerPath], { ...env, VIRGO_TEST_TAMPER: 'launcher.js' }));
+  if (!oldWrapper.equals(await readFile(virgo)) || !oldProfile.equals(await readFile(join(home, profileName)))) throw new Error('Failed acquisition replaced the previous command/profile.');
+  success(command(virgo, ['--help'], env));
+  // ZIP integrity remains mandatory on acquisition WITHOUT an existing trusted pin.
+  // A valid repeat now deliberately reuses that exact pin and never requests a ZIP.
+  for (const behavior of [{ VIRGO_TEST_FAIL: `${bunPackage}.zip` }, { VIRGO_TEST_TAMPER: `${bunPackage}.zip` }, { VIRGO_TEST_INTERRUPT: `${bunPackage}.zip` }]) {
+    const unpinned = await mkdtemp(join(root, 'unpinned archive guard-'));
+    rejected(command('/bin/bash', [installerPath], { ...env, HOME: unpinned, ...behavior }));
+    for (const path of [join(unpinned,'.local/bin/virgo'),join(unpinned,profileName)]) {
+      try { await readFile(path); throw new Error('Unverified archive published command/profile.'); } catch(error) { if(error.code!=='ENOENT')throw error; }
+    }
   }
+  const refreshRuntimeBefore=await lstat(target.executable), refreshProfileBefore=await lstat(join(home,profileName));
+  await rm(downloadLog,{force:true});
+  success(command('/bin/bash',[installerPath],{...env,VIRGO_TEST_FAIL:`${bunPackage}.zip`}));
+  const refreshRequests=(await readFile(downloadLog,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  if(refreshRequests.some(args=>args.at(-3).includes(`${bunPackage}.zip`)))throw new Error('Pinned repeat downloaded Bun ZIP.');
+  const refreshRuntimeAfter=await lstat(target.executable), refreshProfileAfter=await lstat(join(home,profileName));
+  if(refreshRuntimeBefore.ino!==refreshRuntimeAfter.ino||refreshRuntimeBefore.mtimeMs!==refreshRuntimeAfter.mtimeMs||refreshProfileBefore.ino!==refreshProfileAfter.ino||refreshProfileBefore.mtimeMs!==refreshProfileAfter.mtimeMs||!oldProfile.equals(await readFile(join(home,profileName))))throw new Error('Valid refresh changed Bun/profile identity.');
+  await rm(downloadLog,{force:true});
+  const offlineStarted=performance.now();
+  const offlineStatusArgs=['--directory',target.directory,'host','status'];
+  success(command(virgo,offlineStatusArgs,{...env,VIRGO_TEST_FAIL:'current.json'}));await dispatch('old',offlineStatusArgs);
+  try { await readFile(downloadLog); throw new Error('Offline --directory status attempted refresh/network.'); } catch(error) { if(error.code!=='ENOENT')throw error; }
+  if(performance.now()-offlineStarted>=9000)throw new Error('Offline installed command incurred refresh work budget.');
+
   // A new selected CLI fails download/checksum before caller dispatch, retaining the installed target.
   const changed = cli('successor'); await writeFile(assetPath, changed); current.release = 'c'.repeat(64); current.cliSha256 = sha(changed); current.operator={release:current.release,cliSha256:current.cliSha256}; await writeFile(metadataPath, JSON.stringify(current));
   rejected(command(virgo, ['upgrade','--mode','host','--machine','host'], { ...env, VIRGO_TEST_FAIL: cliAsset }));
@@ -303,6 +364,57 @@ try {
   success(command('/bin/bash', [installerPath], env));
   if (!oldProfile.equals(await readFile(join(home, profileName)))) throw new Error('Repeat acquisition duplicated profile content.');
   success(command(loginShell, ['-l','-c','virgo --help'], env));
+  if (process.env.VIRGO_TEST_PRODUCT_REFRESH_HELPER) {
+    const baseLauncher=await readFile(launcherPath), effectLog=join(root,'refresh-effects.jsonl');
+    const observed=async()=> (await readFile(downloadLog,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+    const effects=async()=> (await readFile(effectLog,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+    const publish=async bytes=>{await writeFile(launcherPath,bytes);current.launcherSha256=sha(bytes);await writeFile(metadataPath,JSON.stringify(current));};
+    const resetRefresh=async()=>{await rm(downloadLog,{force:true});await rm(effectLog,{force:true});await rm(dispatchLog,{force:true});};
+    const extra={VIRGO_TEST_PRODUCT_REFRESH_HELPER:process.env.VIRGO_TEST_PRODUCT_REFRESH_HELPER,VIRGO_TEST_RUN_PRODUCT_BRIDGE:'1',VIRGO_TEST_BOUND_LAUNCHER_SHA:sha(baseLauncher),VIRGO_TEST_EFFECT_LOG:effectLog};
+    for (const variant of ['bound','third-sha']) {
+      await publish(Buffer.concat([baseLauncher,Buffer.from('\n// older self-refresh fixture A\n')]));
+      success(command('/bin/bash',[installerPath],env));
+      const targetBytes=variant==='bound'?baseLauncher:Buffer.concat([baseLauncher,Buffer.from('\n// third reviewed-source fixture X\n')]);
+      await publish(targetBytes);
+      const nextBytes=Buffer.concat([baseLauncher,Buffer.from('\n// next published fixture C\n')]);
+      const nextLauncher=join(fixtureDir,'next-launcher.js'),nextMetadata=join(fixtureDir,'next-current.json');
+      await writeFile(nextLauncher,nextBytes);await writeFile(nextMetadata,JSON.stringify({...current,launcherSha256:sha(nextBytes)}));
+      await resetRefresh();
+      const args=['upgrade','--mode','host','--machine','host','--root',quoted];
+      success(command(virgo,args,{...env,...extra,VIRGO_TEST_REFRESH_NEXT_LAUNCHER:nextLauncher,VIRGO_TEST_REFRESH_NEXT_METADATA:nextMetadata}));
+      const rows=await effects();if(rows.length!==1||rows[0].marker!=='successor'||rows[0].guard!==null||JSON.stringify(rows[0].args)!==JSON.stringify([...args,'--release',current.release,'--github-repository','virgo-codes/virgo-release']))throw Error('Refresh/bridge replayed or changed the one operation, or leaked the guard.');
+      const requests=await observed(),acquisitions=requests.filter(args=>args.at(-3).endsWith('/install.sh'));
+      if(acquisitions.length!==(variant==='bound'?1:2))throw Error(`Wrong bounded acquisition count for ${variant}: ${acquisitions.length}`);
+      if(requests.some(args=>args.at(-3).includes(`${bunPackage}.zip`)))throw Error('Composed refresh downloaded an already pinned Bun.');
+      const probes=requests.filter(args=>args.includes('x-virgo-launcher-refresh: 1')&&args.at(-3).endsWith('/current.json')).length;
+      if(probes!==(variant==='bound'?1:2))throw Error(`Wrong future/legacy-bridge probe count: ${variant}/${probes}`);
+      if(JSON.parse(await readFile(metadataPath,'utf8')).launcherSha256!==sha(nextBytes))throw Error('Official metadata did not actually move before the bridge.');
+      if(rows[0].bridgeKind!==(variant==='bound'?'unchanged':'refreshed'))throw Error(`Bridge did not exercise exact source ownership: ${rows[0].bridgeKind}`);
+      if(variant==='bound') {
+        await resetRefresh();
+        const directArgs=['upgrade','--mode','host','--machine','manual-direct'];
+        success(command(process.execPath,[assetPath,...directArgs],{...env,...extra,VIRGO_LAUNCHER_STATE:join(home,'.local/share/virgo/launcher'),VIRGO_LAUNCHER_REFRESH_ONCE:'1'}));
+        const direct=await effects();if(direct.length!==1||direct[0].guard!==null||direct[0].bridgeKind!=='unchanged'||JSON.stringify(direct[0].args)!==JSON.stringify(directArgs))throw Error('Bound direct bridge did not preserve one unguarded effect.');
+        try {await readFile(downloadLog);throw Error('Bound bytes performed bridge network work.');}catch(error){if(error.code!=='ENOENT')throw error;}
+        console.log(JSON.stringify({control:'bound-bytes-direct-manual-guard',networkRequests:0,effects:1,guard:null}));
+      }
+      console.log(JSON.stringify({control:'future-refresh-moving-metadata',variant,acquisitions:acquisitions.length,effects:rows.length,guard:rows[0].guard}));
+      current.launcherSha256=sha(nextBytes);
+    }
+    // An actual old installer AND old JavaScript produce the pre-S289 public entry.
+    const oldInstall=spawnSync('git',['show','1d7ad69:install.sh'],{cwd:repository,encoding:'utf8'}),oldLauncher=spawnSync('git',['show','1d7ad69:launcher.js'],{cwd:repository});
+    if(oldInstall.status!==0||oldLauncher.status!==0)throw Error('Pinned historical source is unavailable.');
+    const oldInstaller=join(fixtureDir,'old-acquisition.sh');await writeFile(oldInstaller,linux?oldInstall.stdout:oldInstall.stdout.replace(/readonly BUN_ARCHIVE_SHA='[a-f0-9]+'/u,`readonly BUN_ARCHIVE_SHA='${sha(await readFile(zip))}'`).replace(/readonly BUN_SHA='[a-f0-9]+'/u,`readonly BUN_SHA='${sha(await readFile(process.execPath))}'`));
+    const legacyHome=join(root,'old official entry home');await mkdir(legacyHome);
+    await publish(linux?oldLauncher.stdout:Buffer.from(oldLauncher.stdout.toString().replace(/const BUN_SHA = '[a-f0-9]+';/u,`const BUN_SHA = '${sha(await readFile(process.execPath))}';`)));success(command('/bin/bash',[oldInstaller],{...environment,HOME:legacyHome}));
+    await publish(baseLauncher);await resetRefresh();
+    const legacyArgs=['install','--mode','host','--machine','legacy','--root',join(root,'legacy requested root'),'--release',current.release,'--github-repository','virgo-codes/virgo-release'];
+    success(command(join(legacyHome,'.local/bin/virgo'),legacyArgs,{...environment,HOME:legacyHome,...extra}));
+    const oldRows=await effects(),oldRequests=await observed();if(oldRows.length!==1||oldRows[0].guard!==null||oldRows[0].bridgeKind!=='refreshed'||JSON.stringify(oldRows[0].args)!==JSON.stringify(legacyArgs))throw Error('Old-entry bridge did not preserve one same CLI invocation.');
+    if(oldRequests.filter(args=>args.at(-3).endsWith('/install.sh')).length!==1||oldRequests.some(args=>args.at(-3).includes(`${bunPackage}.zip`)))throw Error('Old entry failed to acquire exactly once through the pinned-runtime reuse passage.');
+    console.log(JSON.stringify({control:'actual-pre-S289-installer-entry-bridge',acquisitions:1,effects:oldRows.length,guard:oldRows[0].guard}));
+    await publish(baseLauncher);
+  } else console.log('NOT_RUN: paired product-bridge controls require VIRGO_TEST_PRODUCT_REFRESH_HELPER.');
   const concurrentHome=join(root,'concurrent cold acquisition');await mkdir(concurrentHome);
   const parallel=()=>new Promise((done,reject)=>{const child=spawn('/bin/bash',[installerPath],{env:{...environment,HOME:concurrentHome},stdio:['ignore','pipe','pipe']});let stderr='';child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('exit',status=>done({status,stderr}));});
   const attempts=await Promise.all([parallel(),parallel()]);

@@ -34,31 +34,13 @@ for executable in curl unzip awk; do command -v "$executable" >/dev/null || fail
 if [[ "$BUN_PACKAGE" == bun-linux-x64 ]]; then command -v sha256sum >/dev/null || fail 'sha256sum is unavailable.';
 else command -v shasum >/dev/null || fail 'shasum is unavailable.'; fi
 
-state_root="$HOME/.local/share/virgo/launcher"
-bin_root="$HOME/.local/bin"
-mkdir -p "$state_root/packages" "$bin_root"
-[[ ! -L "$state_root" && ! -L "$bin_root" ]] || fail 'command/cache directories must not be symbolic links.'
-cleanup_dir="$(mktemp -d "$state_root/packages/.acquire.XXXXXX")"
-download "https://raw.githubusercontent.com/$REPOSITORY/main/current.json" "$cleanup_dir/current.json"
-download "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$BUN_PACKAGE.zip" "$cleanup_dir/bun.zip"
-verify "$cleanup_dir/bun.zip" "$BUN_ARCHIVE_SHA"
-mkdir "$cleanup_dir/bin"
-unzip -p "$cleanup_dir/bun.zip" "$BUN_PACKAGE/bun" > "$cleanup_dir/bin/bun"
-verify "$cleanup_dir/bin/bun" "$BUN_SHA"
-chmod 700 "$cleanup_dir/bin/bun"
-rm "$cleanup_dir/bun.zip"
-launcher_sha="$("$cleanup_dir/bin/bun" -e 'const v=await Bun.file(process.argv[1]).json();if(!/^[a-f0-9]{64}$/.test(v.launcherSha256))process.exit(1);console.log(v.launcherSha256)' "$cleanup_dir/current.json")" || fail 'official current metadata does not contain the launcher checksum.'
-download "https://raw.githubusercontent.com/$REPOSITORY/main/launcher.js" "$cleanup_dir/launcher.js"
-verify "$cleanup_dir/launcher.js" "$launcher_sha"
-VIRGO_LAUNCHER_STATE="$state_root" "$cleanup_dir/bin/bun" "$cleanup_dir/launcher.js" --bootstrap-cache "$cleanup_dir/current.json"
-# Configure the single owner-home runtime only after every acquisition download passed.
-# A matching existing executable is retained in place, preserving supervisor inode pins.
-"$cleanup_dir/bin/bun" - "$HOME" "$cleanup_dir/bin/bun" "$BUN_VERSION" "$BUN_SHA" <<'JAVASCRIPT'
+configure_bootstrap_runtime() {
+"$1" - "$HOME" "$2" "$BUN_VERSION" "$BUN_SHA" "$3" <<'JAVASCRIPT'
 import { constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { mkdir, lstat, realpath, open, link, unlink } from 'node:fs/promises';
-const [home, staged, version, expected] = process.argv.slice(2);
+const [home, staged, version, expected, mode] = process.argv.slice(2);
 const base = join(home, '.local/share/virgo/bootstrap'), executable = join(base, 'bun', version, 'bin/bun'), path = join(base, 'config.json');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const identity = info => `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
@@ -76,6 +58,7 @@ await directory(base);
 {
   let oldConfig; try { oldConfig = await bytes(path,true); } catch(error) { if(error.code!=='ENOENT')throw error; }
   let existing; try { existing = await bytes(executable); } catch(error) { if(error.code!=='ENOENT')throw error; }
+  if(mode==='verify' && (!oldConfig || !existing))throw new Error('Existing pinned runtime is incomplete.');
   if(oldConfig && !existing)throw new Error('Configured runtime is missing; restore it before repeating acquisition.');
   if(existing && (hash(existing.bytes)!==expected || (existing.info.mode&0o022)!==0 || (existing.info.mode&0o111)===0 || await realpath(executable)!==executable))throw new Error('Existing bootstrap Bun differs; no replacement is authorized.');
   if(!existing) {
@@ -94,6 +77,7 @@ await directory(base);
     const old = JSON.parse(oldConfig.bytes);
     if(old.schemaVersion!==1 || old.bunVersion!==version || old.executable!==executable || old.sha256!==expected || typeof old.identity!=='string' || !/^\d+:\d+:\d+:\d+(?:\.\d+)?$/u.test(old.identity) || old.identity.slice(old.identity.indexOf(':'))!==pin.identity.slice(pin.identity.indexOf(':')))throw new Error('Bootstrap configuration changed; no repin is authorized.');
   } else {
+    if(mode==='verify')throw new Error('Existing runtime has no configuration pin.');
     const temporary = path+'.'+randomUUID()+'.acquisition'; const file = await open(temporary,'wx',0o600);
     try {
       await file.writeFile(JSON.stringify(pin)+'\n'); await file.sync(); await file.close();
@@ -106,13 +90,63 @@ await directory(base);
   const parent = await open(base,'r');try {await parent.sync();}finally{await parent.close();}
 }
 JAVASCRIPT
+}
+
+state_root="$HOME/.local/share/virgo/launcher"
+bin_root="$HOME/.local/bin"
+mkdir -p "$state_root/packages" "$bin_root"
+[[ ! -L "$state_root" && ! -L "$bin_root" ]] || fail 'command/cache directories must not be symbolic links.'
+cleanup_dir="$(mktemp -d "$state_root/packages/.acquire.XXXXXX")"
+download "https://raw.githubusercontent.com/$REPOSITORY/main/current.json" "$cleanup_dir/current.json"
+mkdir "$cleanup_dir/bin"
+bootstrap_bun="$HOME/.local/share/virgo/bootstrap/bun/$BUN_VERSION/bin/bun"
+bootstrap_pin="$HOME/.local/share/virgo/bootstrap/config.json"
+acquisition_bun="$cleanup_dir/bin/bun"
+if [[ -f "$bootstrap_bun" && ! -L "$bootstrap_bun" && -f "$bootstrap_pin" && ! -L "$bootstrap_pin" ]] &&
+   [[ "$(hash_file "$bootstrap_bun")" == "$BUN_SHA" ]] &&
+   configure_bootstrap_runtime "$bootstrap_bun" "$bootstrap_bun" verify; then
+  # The SAME secure reader/pin/identity checks authorize reuse; never replace or repin it.
+  acquisition_bun="$bootstrap_bun"
+else
+  [[ ! -e "$bootstrap_pin" && ! -L "$bootstrap_pin" ]] || fail 'existing bootstrap runtime pin is missing or mismatched; no replacement is authorized.'
+  download "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$BUN_PACKAGE.zip" "$cleanup_dir/bun.zip"
+  verify "$cleanup_dir/bun.zip" "$BUN_ARCHIVE_SHA"
+  unzip -p "$cleanup_dir/bun.zip" "$BUN_PACKAGE/bun" > "$cleanup_dir/bin/bun"
+  verify "$cleanup_dir/bin/bun" "$BUN_SHA"
+  chmod 700 "$cleanup_dir/bin/bun"
+  rm "$cleanup_dir/bun.zip"
+fi
+launcher_sha="$("$acquisition_bun" -e 'const v=await Bun.file(process.argv[1]).json();if(!/^[a-f0-9]{64}$/.test(v.launcherSha256))process.exit(1);console.log(v.launcherSha256)' "$cleanup_dir/current.json")" || fail 'official current metadata does not contain the launcher checksum.'
+download "https://raw.githubusercontent.com/$REPOSITORY/main/launcher.js" "$cleanup_dir/launcher.js"
+verify "$cleanup_dir/launcher.js" "$launcher_sha"
+VIRGO_LAUNCHER_STATE="$state_root" "$acquisition_bun" "$cleanup_dir/launcher.js" --bootstrap-cache "$cleanup_dir/current.json"
+# Configure the single owner-home runtime only after every acquisition download passed.
+# A matching existing executable is retained in place, preserving supervisor inode pins.
+configure_bootstrap_runtime "$acquisition_bun" "$acquisition_bun" configure
+
 bootstrap_bun="$HOME/.local/share/virgo/bootstrap/bun/$BUN_VERSION/bin/bun"
 # All downloads and pins passed. Publish one immutable package, then atomically
-# replace the stable entrypoint. Interrupted setup always leaves the old one usable.
+# replace the stable entrypoint as the final fallible publication. The old package is retained.
+# A valid refresh profile is untouched; a first acquisition may publish PATH before the final shell rename.
 package="$state_root/packages/${cleanup_dir##*/}"
 package="${package/.acquire./package-}"
 mv "$cleanup_dir" "$package"
 cleanup_dir=''
+case "${SHELL:-/bin/zsh}" in
+  */zsh) profile="$HOME/.zprofile" ;;
+  */bash) profile="$HOME/.bash_profile" ;;
+  *) profile="$HOME/.profile" ;;
+esac
+[[ ! -L "$profile" && ( ! -e "$profile" || ( -f "$profile" && -O "$profile" && -r "$profile" ) ) ]] || fail 'shell profile must be absent or a regular owned readable file; acquisition preserved it. Repair the profile path and repeat acquisition.'
+# A bounded, idempotent addition preserves every existing profile byte.
+path_line='export PATH="$HOME/.local/bin:$PATH" # Virgo public command'
+if [[ ! -e "$profile" ]] || ! grep -F -x -- "$path_line" "$profile" >/dev/null 2>&1; then
+  profile_temporary="$(mktemp "$HOME/.virgo-profile.XXXXXX")"
+  if [[ -f "$profile" ]]; then cat "$profile" > "$profile_temporary"; fi
+  printf '\n%s\n' "$path_line" >> "$profile_temporary"
+  mv "$profile_temporary" "$profile"
+fi
+
 wrapper="$(mktemp "$bin_root/.virgo.XXXXXX")"
 {
   printf '#!/usr/bin/env bash\nset -euo pipefail\n'
@@ -126,20 +160,6 @@ wrapper="$(mktemp "$bin_root/.virgo.XXXXXX")"
 chmod 700 "$wrapper"
 mv -f "$wrapper" "$bin_root/virgo"
 
-case "${SHELL:-/bin/zsh}" in
-  */zsh) profile="$HOME/.zprofile" ;;
-  */bash) profile="$HOME/.bash_profile" ;;
-  *) profile="$HOME/.profile" ;;
-esac
-[[ ! -L "$profile" ]] || fail 'shell profile is a symbolic link; acquisition preserved it. Use a regular owned shell profile and repeat acquisition.'
-# A bounded, idempotent addition preserves every existing profile byte.
-path_line='export PATH="$HOME/.local/bin:$PATH" # Virgo public command'
-if [[ ! -e "$profile" ]] || ! grep -F -x -- "$path_line" "$profile" >/dev/null 2>&1; then
-  profile_temporary="$(mktemp "$HOME/.virgo-profile.XXXXXX")"
-  if [[ -f "$profile" ]]; then cat "$profile" > "$profile_temporary"; fi
-  printf '\n%s\n' "$path_line" >> "$profile_temporary"
-  mv "$profile_temporary" "$profile"
-fi
 printf '%s\n' 'Virgo command acquired. Open a new terminal, then run:' '  virgo --help' '  virgo install --mode local --machine <machine-id>'
 # Retain the former checkout-based invocation for existing callers. Public guides
 # acquire first and perform operations with the installed virgo command.

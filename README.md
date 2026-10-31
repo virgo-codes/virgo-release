@@ -1,7 +1,7 @@
 # Virgo public command
 
 This repository publishes Virgo's official acquisition script and stable `virgo`
-command for macOS Apple Silicon. The command selects a checksum-verified release
+command for macOS Apple Silicon and Linux x64. The command selects a checksum-verified release
 CLI and delegates installation and runtime operations to that existing CLI.
 
 Acquire the command once:
@@ -32,9 +32,38 @@ consent remain separate from command acquisition.
 `current.json` pins the source commit/tree, exact release and the SHA-256 of
 `virgo-macos-arm64`. It also pins the launcher code. The acquisition script pins
 the official Bun archive and executable. Downloads use HTTPS and verify before
-replacing the stable command. Repeat acquisition after an interrupted setup or
-to obtain published launcher changes; a failed download or checksum leaves the
-prior command usable. Acquisition does not change a Hub, Host or provider.
+replacing the stable command. Root `install`, `upgrade` and `rollback` calls
+optionally check the official launcher checksum. When it differs, they use this
+same acquisition writer and start the verified stable command once with the
+original arguments. A refresh-only one-shot hint prevents another probe; it
+never skips runtime, installed-release or target integrity checks. Help, skills
+and every `--directory` command make no refresh attempt.
+
+Optional refresh has one 10-second total budget, including cleanup: up to 9
+seconds of work and the final second for owned-child termination and join.
+A failed or timed-out refresh preserves the verified command and warns
+`virgo: launcher refresh pending; the verified command will continue.` The next
+qualifying call retries; no persistent skip is stored. User interruption cancels
+the invocation after owned refresh work joins, before any command effect. An
+unproved live refresh writer is a process failure, not permission to continue.
+A matching existing pinned Bun is reused without downloading or repinning it.
+
+The old fixed-package launcher cannot learn this feature merely because new
+launcher bytes are published. Normal 2.2.13 operator delivery provides a bridge:
+the verified new CLI acquires the official default launcher before its first
+install/upgrade effect, then continues that same CLI invocation once. Its one
+accepted launcher-source hash avoids a redundant bridge probe and acquisition when that reviewed
+refresh-capable entry is already installed; it does not prove a probe ran.
+For this one source binding the launcher owns the only optional10s attempt. An unknown third launcher hash may use at most one additional bounded bridge acquisition, still with one operation effect; no universal future-source claim is made. Custom/unrecognized ownership is not overwritten. Until that reachable bridge or
+acquisition runs, old help and installed-only entry paths remain old.
+
+Repeat acquisition after an interrupted setup. A download/checksum/profile
+preparation failure leaves the prior stable command in place. The final atomic
+shell rename commits acquisition; a lost reply does not authorize reverting a
+successful or newer entry. A valid refresh profile is untouched. On first
+acquisition PATH may be published before the final shell rename; the two files
+are not claimed as one transaction. Acquisition does not change a Hub, Host or
+provider.
 
 Install an additional Host using the existing Hub's address, Account and scoped
 enrollment-credential file:

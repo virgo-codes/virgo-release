@@ -1,4 +1,311 @@
+import { constants as refreshConstants } from 'node:fs';
+import { open as refreshOpen, lstat as refreshStat, realpath as refreshRealpath, mkdtemp as refreshTemp, rm as refreshRemove } from 'node:fs/promises';
+import { join as refreshJoin, dirname as refreshDirname, resolve as refreshResolve, isAbsolute as refreshAbsolute } from 'node:path';
+import { homedir as refreshHome } from 'node:os';
+import { createHash as refreshHash } from 'node:crypto';
+const LAUNCHER_REFRESH_TIMEOUT_MS = 10_000;
+const LAUNCHER_REFRESH_ONCE = 'VIRGO_LAUNCHER_REFRESH_ONCE';
+const LAUNCHER_REFRESH_PENDING = 'virgo: launcher refresh pending; the verified command will continue.';
+// Bind ONLY after Web reviews the exact self-refresh-capable launcher source.
+const refreshCleanupMs = 1_000;
+const refreshBase = 'https://raw.githubusercontent.com/virgo-codes/virgo-release/main/';
+const refreshDigest = (bytes) => refreshHash('sha256').update(bytes).digest('hex');
+async function refreshDirectory(path) {
+    if (!refreshAbsolute(path) || refreshResolve(path) !== path || /[\u0000-\u001f\u007f]/u.test(path))
+        throw new Error();
+    if (refreshDirname(path) !== path)
+        await refreshDirectory(refreshDirname(path));
+    const info = await refreshStat(path);
+    if (!info.isDirectory() || info.isSymbolicLink() || await refreshRealpath(path) !== path || ((info.mode & 0o022) !== 0 && !(info.uid === 0 && (info.mode & 0o1000))))
+        throw new Error();
+}
+async function refreshBytes(path, maximum = 64 * 1024, privateFile = false) {
+    const file = await refreshOpen(path, refreshConstants.O_RDONLY | refreshConstants.O_NOFOLLOW | refreshConstants.O_NONBLOCK);
+    try {
+        const info = await file.stat();
+        if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & (privateFile ? 0o077 : 0o022)) !== 0 || info.size > maximum)
+            throw new Error();
+        return await file.readFile();
+    }
+    finally {
+        await file.close();
+    }
+}
+// Decode ONLY the literal word grammar emitted by Bash printf %q. Never eval/source a wrapper.
+function refreshLiteral(word) {
+    if (word.startsWith("$'") && word.endsWith("'")) {
+        const bytes = [];
+        const text = word.slice(2, -1);
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] !== "\\") {
+                if (text[i] === "'")
+                    throw new Error();
+                const cp = text.codePointAt(i);
+                bytes.push(Buffer.from(String.fromCodePoint(cp)));
+                if (cp > 0xffff)
+                    i++;
+                continue;
+            }
+            const next = text[++i];
+            if (next === undefined)
+                throw new Error();
+            const simple = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\x0b', "\\": "\\", "'": "'" };
+            if (next in simple) {
+                bytes.push(Buffer.from(simple[next]));
+                continue;
+            }
+            const tail = text.slice(i);
+            const oct = /^[0-7]{1,3}/u.exec(tail);
+            if (oct) {
+                bytes.push(Buffer.from([Number.parseInt(oct[0], 8)]));
+                i += oct[0].length - 1;
+                continue;
+            }
+            const hex = /^(?:x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})/u.exec(tail);
+            if (!hex)
+                throw new Error();
+            const cp = Number.parseInt(hex[0].slice(1), 16);
+            bytes.push(next === 'x' ? Buffer.from([cp]) : Buffer.from(String.fromCodePoint(cp)));
+            i += hex[0].length - 1;
+        }
+        return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(bytes));
+    }
+    let out = '';
+    for (let i = 0; i < word.length; i++) {
+        const c = word[i];
+        if (c === '\\') {
+            if (++i === word.length)
+                throw new Error();
+            out += word[i];
+        }
+        else {
+            if (/[\s$`'";&|<>()]/u.test(c))
+                throw new Error();
+            out += c;
+        }
+    }
+    return out;
+}
+async function refreshDefaultEntry(runtimeSha) {
+    try {
+        const home = refreshHome(), state = refreshJoin(home, '.local/share/virgo/launcher'), entry = refreshJoin(home, '.local/bin/virgo');
+        if (process.env.VIRGO_LAUNCHER_STATE !== state)
+            return undefined;
+        await refreshDirectory(state);
+        await refreshDirectory(refreshDirname(entry));
+        const entryInfo = await refreshStat(entry);
+        if (!entryInfo.isFile() || entryInfo.isSymbolicLink() || entryInfo.nlink !== 1 || (entryInfo.mode & 0o111) === 0)
+            return undefined;
+        const raw = (await refreshBytes(entry)).toString('utf8');
+        const lines = raw.trimEnd().split('\n');
+        if (lines[0] !== '#!/usr/bin/env bash' || lines[1] !== 'set -euo pipefail' || !lines[2]?.startsWith('package=') || !lines[3]?.startsWith('state_root=') || !lines[4]?.startsWith('bootstrap_bun='))
+            return undefined;
+        const packagePath = refreshLiteral(lines[2].slice(8)), shellState = refreshLiteral(lines[3].slice(11)), runtime = refreshLiteral(lines[4].slice(14));
+        if (shellState !== state || refreshDirname(packagePath) !== refreshJoin(state, 'packages') || !/^package-[A-Za-z0-9_-]+$/u.test(packagePath.slice(packagePath.lastIndexOf('/') + 1)) || runtime !== refreshJoin(home, '.local/share/virgo/bootstrap/bun/1.3.14/bin/bun'))
+            return undefined;
+        const tail = lines.slice(5).map(line => line.trim()).filter(Boolean);
+        const hashCommand = process.platform === 'linux' ? 'sha256sum "$1" | awk \'{print $1}\'' : 'shasum -a 256 "$1" | awk \'{print $1}\'';
+        if (tail.length !== 9 || tail[0] !== 'hash_file ()' || tail[1] !== '{' || tail[2] !== hashCommand || tail[3] !== '}' || tail[4] !== '[[ ! -L "$bootstrap_bun" ]] || { echo "virgo: configured runtime is a symlink." >&2; exit 1; }' || tail[7] !== 'export VIRGO_LAUNCHER_STATE="$state_root"' || tail[8] !== 'exec "$bootstrap_bun" "$package/launcher.js" "$@"')
+            return undefined;
+        const runtimeMatch = /^\[\[ "\$\(hash_file "\$bootstrap_bun"\)" == ([a-f0-9]{64}) \]\] \|\| \{ echo "virgo: internal runtime checksum failed; repeat official acquisition\." >&2; exit 1; \}$/u.exec(tail[5]);
+        const launcherMatch = /^\[\[ "\$\(hash_file "\$package\/launcher\.js"\)" == ([a-f0-9]{64}) \]\] \|\| \{ echo "virgo: launcher checksum failed; repeat official acquisition\." >&2; exit 1; \}$/u.exec(tail[6]);
+        if (!runtimeMatch || !launcherMatch)
+            return undefined;
+        const expected = runtimeSha ?? (process.platform === 'linux' ? '9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf983190cea6d715be2ad74' : 'e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233');
+        if (runtimeMatch[1] !== expected)
+            return undefined;
+        await refreshDirectory(packagePath);
+        await refreshDirectory(refreshDirname(runtime));
+        const pin = JSON.parse((await refreshBytes(refreshJoin(home, '.local/share/virgo/bootstrap/config.json'), 8192, true)).toString('utf8'));
+        const info = await refreshStat(runtime), identity = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+        if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o022) !== 0 || (info.mode & 0o111) === 0 || await refreshRealpath(runtime) !== runtime || pin.schemaVersion !== 1 || pin.bunVersion !== '1.3.14' || pin.executable !== runtime || pin.sha256 !== expected || typeof pin.identity !== 'string' || !/^\d+:\d+:\d+:\d+(?:\.\d+)?$/u.test(pin.identity) || pin.identity.slice(pin.identity.indexOf(':')) !== identity.slice(identity.indexOf(':')) || refreshDigest(await refreshBytes(runtime, 128 * 1024 * 1024)) !== expected)
+            return undefined;
+        const sha = refreshDigest(await refreshBytes(refreshJoin(packagePath, 'launcher.js'), 4 * 1024 * 1024));
+        if (sha !== launcherMatch[1])
+            return undefined;
+        return { entry, state, sha, module: refreshJoin(packagePath, 'launcher.js') };
+    }
+    catch {
+        return undefined;
+    }
+}
+async function refreshDrain(stream) { const reader = stream.getReader(); try {
+    while (!(await reader.read()).done) { /* Discard output; never relay environment or acquisition reasons. */ }
+}
+finally {
+    reader.releaseLock();
+} }
+async function refreshGroup(pid, deadline) {
+    const left = deadline - performance.now();
+    if (left <= 0)
+        return undefined;
+    let child;
+    try {
+        child = Bun.spawn(['/bin/ps', '-axo', 'pid=,pgid=,stat='], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+    }
+    catch {
+        return undefined;
+    }
+    const timer = setTimeout(() => child.kill('SIGKILL'), Math.max(1, left));
+    try {
+        const [code, text] = await Promise.all([child.exited, new Response(child.stdout).text(), refreshDrain(child.stderr)]);
+        if (code !== 0)
+            return undefined;
+        return text.split('\n').some(line => { const fields = line.trim().split(/\s+/u); return Number(fields[1]) === pid && !fields[2]?.startsWith('Z'); });
+    }
+    catch {
+        return undefined;
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+async function refreshRun(argv, context) {
+    if (performance.now() >= context.workEnd || context.interrupted !== undefined) {
+        context.timedOut = true;
+        return false;
+    }
+    const env = { ...process.env };
+    delete env[LAUNCHER_REFRESH_ONCE];
+    delete env.BASH_ENV;
+    delete env.ENV;
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+    let child;
+    try {
+        child = Bun.spawn(argv, { detached: true, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', env });
+    }
+    catch {
+        return false;
+    }
+    const group = child.pid;
+    let stopped = false;
+    let escalation;
+    const kill = (signal) => { try {
+        process.kill(-group, signal);
+    }
+    catch { /* Group may already be gone. */ } };
+    const stop = () => { if (!stopped) {
+        stopped = true;
+        kill('SIGTERM');
+        escalation = setTimeout(() => kill('SIGKILL'), Math.max(0, Math.min(refreshCleanupMs / 2, context.deadline - performance.now() - refreshCleanupMs / 2)));
+    } };
+    const cancel = (code) => { context.interrupted = code; stop(); };
+    const onInt = () => cancel(130), onTerm = () => cancel(143), onHup = () => cancel(129);
+    process.on('SIGINT', onInt);
+    process.on('SIGTERM', onTerm);
+    process.on('SIGHUP', onHup);
+    const soft = setTimeout(() => { context.timedOut = true; stop(); }, Math.max(0, context.workEnd - performance.now()));
+    // Within the final1s: TERM first, KILL by9.5s, retain0.5s for absence/readback+joins.
+    const hard = setTimeout(() => kill('SIGKILL'), Math.max(0, context.deadline - performance.now() - refreshCleanupMs / 2));
+    const stdout = refreshDrain(child.stdout), stderr = refreshDrain(child.stderr);
+    try {
+        const code = await child.exited;
+        // Keep both deadline timers live until descendants are proved gone, even if the shell exited.
+        let alive = await refreshGroup(group, context.deadline);
+        if (alive) {
+            stop();
+            const escalate = Math.min(context.deadline - refreshCleanupMs / 2, performance.now() + refreshCleanupMs / 2);
+            while (alive && performance.now() < context.deadline) {
+                if (performance.now() >= escalate)
+                    kill('SIGKILL');
+                await new Promise(resolve => setTimeout(resolve, 10));
+                alive = await refreshGroup(group, context.deadline);
+            }
+        }
+        if (alive !== false) {
+            context.unsafe = true;
+            kill('SIGKILL');
+        }
+        await Promise.all([stdout, stderr]);
+        return code === 0 && !stopped && !context.timedOut && context.interrupted === undefined && !context.unsafe;
+    }
+    catch {
+        kill('SIGKILL');
+        await child.exited.catch(() => { });
+        await Promise.allSettled([stdout, stderr]);
+        if (await refreshGroup(group, context.deadline) !== false)
+            context.unsafe = true;
+        return false;
+    }
+    finally {
+        clearTimeout(soft);
+        clearTimeout(hard);
+        if (escalation)
+            clearTimeout(escalation);
+        process.off('SIGINT', onInt);
+        process.off('SIGTERM', onTerm);
+        process.off('SIGHUP', onHup);
+    }
+}
+async function refreshOfficialLauncher(mode, qualifiedSha = '', runtimeSha, activeModule) {
+    delete process.env[LAUNCHER_REFRESH_ONCE];
+    const started = performance.now();
+    const owned = await refreshDefaultEntry(runtimeSha);
+    if (!owned)
+        return { kind: 'skipped' };
+    // Accepted exact source BYTES own optional refresh; this never claims a probe ran.
+    // Only the bridge is redundant. All ordinary command trust/pin checks still run.
+    if (mode === 'bridge' && owned.sha === qualifiedSha)
+        return { kind: 'unchanged' };
+    if (mode === 'launcher' && activeModule) {
+        try {
+            await refreshDirectory(refreshDirname(activeModule));
+            if (refreshDirname(refreshDirname(activeModule)) !== refreshJoin(owned.state, 'packages') || await refreshRealpath(activeModule) !== activeModule)
+                return { kind: 'skipped' };
+        }
+        catch {
+            return { kind: 'skipped' };
+        }
+    }
+    const context = { deadline: started + LAUNCHER_REFRESH_TIMEOUT_MS, workEnd: started + LAUNCHER_REFRESH_TIMEOUT_MS - refreshCleanupMs, timedOut: false, unsafe: false };
+    let scratch, pending = false;
+    try {
+        scratch = await refreshTemp(refreshJoin(owned.state, '.refresh-'));
+        const metadata = refreshJoin(scratch, 'current.json');
+        const curl = (url, path) => ['curl', '-q', '--fail', '--location', '--silent', '--show-error', '--proto', '=https', '--proto-redir', '=https', '--header', 'x-virgo-launcher-refresh: 1', url, '--output', path];
+        if (!await refreshRun(curl(refreshBase + 'current.json', metadata), context))
+            throw new Error();
+        const current = JSON.parse((await refreshBytes(metadata, 4 * 1024 * 1024)).toString('utf8'));
+        if (current.sourceRepository !== 'virgo-codes/virgo' || typeof current.launcherSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(current.launcherSha256))
+            throw new Error();
+        if (owned.sha === current.launcherSha256) {
+            if (mode === 'launcher' && activeModule && refreshDigest(await refreshBytes(activeModule, 4 * 1024 * 1024)) !== owned.sha)
+                return { kind: 'refreshed', entry: owned.entry };
+            return { kind: 'unchanged' };
+        }
+        const script = refreshJoin(scratch, 'install.sh');
+        if (!await refreshRun(curl(refreshBase + 'install.sh', script), context) || !await refreshRun(['/bin/bash', script], context))
+            throw new Error();
+        const after = await refreshDefaultEntry(runtimeSha);
+        if (!after || after.sha !== current.launcherSha256)
+            throw new Error();
+        return { kind: 'refreshed', entry: after.entry };
+    }
+    catch {
+        if (context.unsafe)
+            return { kind: 'unsafe', exitCode: 1 };
+        if (context.interrupted !== undefined)
+            return { kind: 'cancelled', exitCode: context.interrupted };
+        pending = true;
+        return { kind: 'pending' };
+    }
+    finally {
+        if (scratch && !context.unsafe)
+            try {
+                await refreshRemove(scratch, { recursive: true, force: true });
+            }
+            catch {
+                // The owned writer is proved absent. Scratch housekeeping cannot replace
+                // the chosen dispatch/cancellation outcome; retain the leftover privately.
+                if (!pending && context.interrupted === undefined)
+                    console.error(LAUNCHER_REFRESH_PENDING);
+            }
+    }
+}
+
 import { createHash } from 'node:crypto';
+import { fileURLToPath as launcherFilePath } from 'node:url';
 import { constants } from 'node:fs';
 import { open, lstat, realpath, readFile, writeFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -19,16 +326,16 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(message); };
 const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : fail('Malformed installation or release receipt.');
 
-async function run(executable, args) {
+async function run(executable, args, env = process.env) {
   return new Promise((accept, reject) => {
-    const child = spawn(executable, args, { stdio: 'inherit' });
+    const child = spawn(executable, args, { stdio: 'inherit', env });
     const forward = signal => child.kill(signal);
-    const interrupt = () => forward('SIGINT'), terminate = () => forward('SIGTERM');
-    process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+    const interrupt = () => forward('SIGINT'), terminate = () => forward('SIGTERM'), hangup = () => forward('SIGHUP');
+    process.on('SIGINT', interrupt); process.on('SIGTERM', terminate); process.on('SIGHUP', hangup);
     child.once('error', reject);
     child.once('exit', (code, signal) => {
-      process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
-      accept(code ?? (signal === 'SIGINT' ? 130 : 143));
+      process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup);
+      accept(code ?? (signal === 'SIGINT' ? 130 : signal === 'SIGHUP' ? 129 : 143));
     });
   });
 }
@@ -355,6 +662,9 @@ function rootCommandArgs(argv, selected) {
   return argv;
 }
 async function main(argv) {
+  const capturedArgv = [...argv];
+  const refreshedOnce = process.env[LAUNCHER_REFRESH_ONCE] === '1';
+  delete process.env[LAUNCHER_REFRESH_ONCE];
   if (argv[0] === '--bootstrap-cache' && argv.length === 2) { const { current } = await currentCLI(argv[1]); if (current.operator) await currentCLI(argv[1], true); return 0; }
   await configuredRuntime();
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]))) {
@@ -389,7 +699,15 @@ async function main(argv) {
     const instance = flags.get('--instance') ?? (mode === 'host' ? 'host' : 'local-hub');
     const directory = join(root, 'instances', encodeURIComponent(`${flags.get('--machine')}\0agent_host\0${instance}`));
     const selected = await installedCLI(directory);
-    return run(await installedExecutable(selected), [selected.path, ...args]);
+    const executable = await installedExecutable(selected);
+    if (!refreshedOnce) {
+      const refresh = await refreshOfficialLauncher('launcher', '', RUNTIME_SHA, launcherFilePath(import.meta.url));
+      if (refresh.kind === 'unsafe') throw new Error('Launcher refresh writer cleanup could not be proved.');
+      if (refresh.kind === 'cancelled') return refresh.exitCode ?? 1;
+      if (refresh.kind === 'pending') console.error(LAUNCHER_REFRESH_PENDING);
+      if (refresh.kind === 'refreshed') return run(refresh.entry, capturedArgv, { ...process.env, [LAUNCHER_REFRESH_ONCE]: '1' });
+    }
+    return run(executable, [selected.path, ...args]);
   }
   if (flags.has('--plan-id')) fail('--plan-id is only supported for rollback.');
   if ((flags.has('--release') || distributions.length) && (!flags.has('--release') || distributions.length !== 1))
@@ -407,6 +725,13 @@ async function main(argv) {
   } catch (error) {
     // Only an absent target is a clean install; missing receipts inside one never fall back.
     if (error.code !== 'ENOENT' || await lstat(targetDirectory).then(() => true, missing => missing.code === 'ENOENT' ? false : Promise.reject(missing))) throw error;
+  }
+  if (!refreshedOnce) {
+    const refresh = await refreshOfficialLauncher('launcher', '', RUNTIME_SHA, launcherFilePath(import.meta.url));
+    if (refresh.kind === 'unsafe') throw new Error('Launcher refresh writer cleanup could not be proved.');
+    if (refresh.kind === 'cancelled') return refresh.exitCode ?? 1;
+    if (refresh.kind === 'pending') console.error(LAUNCHER_REFRESH_PENDING);
+    if (refresh.kind === 'refreshed') return run(refresh.entry, capturedArgv, { ...process.env, [LAUNCHER_REFRESH_ONCE]: '1' });
   }
   if (flags.has('--release') && flags.get('--github-repository') === REPOSITORY) {
     const target = await targetCLI(flags.get('--release'));

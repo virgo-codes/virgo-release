@@ -41,10 +41,17 @@ if (import.meta.main) {
   }
   const main = `https://raw.githubusercontent.com/${REPOSITORY}/main/`;
   const cli = new RegExp(`^https://github\\.com/${REPOSITORY}/releases/download/release-[a-f0-9]{64}/${cliAsset}$`, 'u');
-  source ??= url === `${main}current.json` ? join(env.VIRGO_TEST_FILES, 'current.json') : url === `${main}launcher.js` ? env.VIRGO_TEST_LAUNCHER
+  source ??= url === `${main}current.json` ? join(env.VIRGO_TEST_FILES, 'current.json') : url === `${main}launcher.js` ? env.VIRGO_TEST_LAUNCHER : url === `${main}install.sh` ? join(env.VIRGO_TEST_FILES, 'install.sh')
     : url === `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${bunPackage}.zip` ? join(env.VIRGO_TEST_FILES, 'bun.zip')
     : cliAsset && cli.test(url) ? join(env.VIRGO_TEST_FILES, 'current cli') : null;
   if (!source) process.exit(94);
+  if(url===`${main}current.json` && !args.includes('x-virgo-launcher-refresh: 1') && env.VIRGO_TEST_REFRESH_NEXT_METADATA) {
+    const requests=(await readFile(env.VIRGO_TEST_DOWNLOAD_LOG,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+    if(requests.filter(row=>!row.includes('x-virgo-launcher-refresh: 1')&&row.at(-3)===url).length===2) {
+      await writeFile(join(env.VIRGO_TEST_FILES,'current.json'),await readFile(env.VIRGO_TEST_REFRESH_NEXT_METADATA));
+      await writeFile(env.VIRGO_TEST_LAUNCHER,await readFile(env.VIRGO_TEST_REFRESH_NEXT_LAUNCHER));
+    }
+  }
   let bytes = await readFile(source);
   if (env.VIRGO_TEST_TAMPER && url.includes(env.VIRGO_TEST_TAMPER)) bytes = Buffer.concat([bytes, Buffer.from('tamper')]);
   await writeFile(out, bytes);

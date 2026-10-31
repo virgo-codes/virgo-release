@@ -86,7 +86,12 @@ async function dispatch(marker, args) {
   const actual = await dispatched();
   if (JSON.stringify(actual) !== JSON.stringify([{ marker, args }])) throw new Error(JSON.stringify({ actual, marker, args }));
 }
-const downloads = async () => (await readFile(downloadLog, 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).trim().split('\n').filter(Boolean).map(line => JSON.parse(line).at(-3));
+let sawFreshnessProbe=false;
+const downloadRequests = async () => (await readFile(downloadLog, 'utf8').catch(error => error.code === 'ENOENT' ? '' : Promise.reject(error))).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+// Only the explicitly labeled optional freshness probe is separate. Unlabeled
+// current.json and every CLI fetch remain operator traffic for the original zero assertions.
+const downloads = async () => {const rows=await downloadRequests();for(const args of rows.filter(row=>row.includes('x-virgo-launcher-refresh: 1'))){if(!args.at(-3).endsWith('/current.json')&&!args.at(-3).endsWith('/install.sh'))throw Error('A marked probe hid non-freshness/operator traffic.');sawFreshnessProbe=true;}return rows.filter(args=>!args.includes('x-virgo-launcher-refresh: 1')).map(args=>args.at(-3));};
+
 const operatorDownloads = urls => urls.filter(url => url.endsWith('/current.json') || url.endsWith(`/${cliAsset}`));
 const apiDownloads = urls => urls.filter(url => url.startsWith('https://api.github.com/'));
 // Byte-identical to virgo distribution/local-distribution.ts:15-26 (canonical,
@@ -302,6 +307,22 @@ try {
   ];
   for (const [cause, published] of integrityCases) await integrityClass(cause, published);
 
+  // An explicitly supplied refresh hint cannot bypass any target integrity check.
+  {
+    const [cause, published] = integrityCases[7];
+    await publish(published); await reset();
+    await rm(join(state, 'releases', sha(targetCli)), { recursive: true, force: true });
+    const before = await readdir(join(state, 'releases'));
+    const result = command(virgo, upgrade(official), { ...pinned, VIRGO_LAUNCHER_REFRESH_ONCE: '1' });
+    const kept = `installed version kept, still working; integrity failed: ${cause.replace(/\.$/u, '')}; the next upgrade run will retry`;
+    if (result.status !== 75 || !result.stderr.split('\n').includes(`virgo: ${kept}`)) throw new Error(`Manual refresh hint bypassed integrity: ${JSON.stringify(result)}`);
+    if (/refused|target unavailable/u.test(result.stderr) || (await dispatched()).length) throw new Error('Manual refresh hint changed integrity disposition or executed a CLI.');
+    const urls = await downloads();
+    if (operatorDownloads(urls).length || urls.filter(url => url === metadataUrl).length !== INTEGRITY_ATTEMPTS) throw new Error('Manual refresh hint changed the bounded target integrity retry.');
+    if (JSON.stringify(await readdir(join(state, 'releases'))) !== JSON.stringify(before)) throw new Error('Manual refresh hint cached an unverified target.');
+    await unchanged('Manual refresh hint integrity failure'); cases++;
+  }
+
   // The upgrade completes on its own once a verified artifact arrives: the first
   // fetch serves tampered bytes, the automatic re-fetch serves R's verified archive.
   for (const [cause, published] of [
@@ -343,5 +364,6 @@ try {
   await dispatch('old', [...implicit, '--release', older, '--github-repository', OFFICIAL]);
   if (apiDownloads(await downloads()).length) throw new Error('Implicit upgrade fetched a target.');
   await unchanged('Implicit upgrade');
+  if(!sawFreshnessProbe)throw Error('Optional freshness path was never exercised.');
   console.log(`PASS: ${cases} explicit-target upgrade dispatch checks on ${platform.os} ${platform.architecture}; real wrapper/launcher/Bun, 2.2.1-class installed Host and operator, isolated fixtures, no live Hub/Host/provider effects.`);
 } finally { await rm(root, { recursive: true, force: true }); }
