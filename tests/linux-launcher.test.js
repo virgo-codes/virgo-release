@@ -16,6 +16,9 @@ const otherRuntimeSha = arm64 ? '9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf9831
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const root = await mkdtemp(join(tmpdir(), 'virgo-linux-acquisition-'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+  : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`
+    : JSON.stringify(value);
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const release = 'a'.repeat(64), other = 'b'.repeat(64);
 const archive = await readFile(process.env.VIRGO_TEST_BUN_ARCHIVE);
@@ -28,13 +31,30 @@ try {
   const launcher = await readFile(join(repository, 'launcher.js'));
   await writeFile(join(fixtures, 'launcher.js'), launcher);
   const dispatch = join(root, 'dispatch.json');
-  const cli = Buffer.from(`await Bun.write(process.env.VIRGO_TEST_DISPATCH,JSON.stringify(process.argv.slice(2)));\n`);
+  // Exercise the plain install's selected operator against a compatibility-bound
+  // manifest. An argv-only recorder missed the published legacy operator bug.
+  // This is the product's canonical digest contract, not Host activation.
+  const cli = Buffer.from(`import { createHash } from 'node:crypto';
+const canonical = ${canonical.toString()};
+if (process.argv[2] === 'install') {
+  const manifest = await Bun.file(process.env.VIRGO_TEST_RELEASE_MANIFEST).json();
+  const { release, artifacts, compatibility } = manifest;
+  const input = { release, artifacts, ...(!process.env.VIRGO_TEST_LEGACY_OPERATOR && compatibility !== undefined ? { compatibility } : {}) };
+  if (createHash('sha256').update(canonical(input)).digest('hex') !== manifest.manifestDigest) {
+    console.log(JSON.stringify({ ok: false, error: 'Release manifest digest failed.' })); process.exit(2);
+  }
+}
+await Bun.write(process.env.VIRGO_TEST_DISPATCH,JSON.stringify(process.argv.slice(2)));\n`);
   await writeFile(join(fixtures, 'cli'), cli);
   const linux = { platform: { os: 'linux', architecture: process.arch }, release, cliSha256: sha(cli), operator: { release, cliSha256: sha(cli) } };
   const metadata = { sourceRepository: 'virgo-codes/virgo', launcherSha256: sha(launcher), platforms: [
     { ...linux, platform: { os: 'macos', architecture: 'arm64' }, release: other },
     { ...linux, platform: { os: 'linux', architecture: arm64 ? 'x64' : 'arm64' }, release: other }, linux] };
   await writeFile(join(fixtures, 'current.json'), JSON.stringify(metadata));
+  const manifestPath = join(fixtures, 'release.json');
+  const manifest = { release, artifacts: [], compatibility: { hubProtocol: { readable: { minimum: 1, maximum: 2 }, writes: 2 } } };
+  manifest.manifestDigest = sha(canonical(manifest));
+  await writeFile(manifestPath, JSON.stringify(manifest));
   const downloader = join(root, 'download.js');
   await writeFile(downloader, `import{readFile,writeFile}from'node:fs/promises';import{join}from'node:path';
 const a=process.argv.slice(2),url=a.at(-3),out=a.at(-1);
@@ -42,7 +62,7 @@ const file=url.endsWith('/current.json')?'current.json':url.endsWith('/launcher.
 if(!file||a.at(-2)!=='--output')process.exit(94);
 let b=await readFile(join(process.env.VIRGO_TEST_FIXTURES,file));if(process.env.VIRGO_TEST_TAMPER===file)b=Buffer.concat([b,Buffer.from('tamper')]);await writeFile(out,b);\n`);
   await writeFile(join(bin, 'curl'), `#!/bin/bash\nexec ${quote(process.execPath)} ${quote(downloader)} "$@"\n`, { mode: 0o700 });
-  const env = { ...process.env, HOME: home, SHELL: '/bin/bash', PATH: `${bin}:/usr/bin:/bin`, VIRGO_TEST_FIXTURES: fixtures, VIRGO_TEST_DISPATCH: dispatch };
+  const env = { ...process.env, HOME: home, SHELL: '/bin/bash', PATH: `${bin}:/usr/bin:/bin`, VIRGO_TEST_FIXTURES: fixtures, VIRGO_TEST_DISPATCH: dispatch, VIRGO_TEST_RELEASE_MANIFEST: manifestPath };
   const run = (file, args, extra = {}, expected = 0) => {
     const result = spawnSync(file, args, { env: { ...env, ...extra }, encoding: 'utf8' });
     if (result.error || (expected === 0 ? result.status !== 0 : result.status === 0)) throw new Error(JSON.stringify(result));
@@ -58,6 +78,13 @@ let b=await readFile(join(process.env.VIRGO_TEST_FIXTURES,file));if(process.env.
   const installArgs = ['install', '--mode', 'host', '--machine', 'isolated', '--root', join(root, 'installation')];
   run(virgo, installArgs);
   if (JSON.stringify(JSON.parse(await readFile(dispatch))) !== JSON.stringify([...installArgs, '--release', release, '--github-repository', 'virgo-codes/virgo-release'])) throw new Error('Wrong platform release selection.');
+  const legacy = run(virgo, installArgs, { VIRGO_TEST_LEGACY_OPERATOR: '1' }, 1);
+  if (legacy.status !== 2 || legacy.stdout.trim() !== '{"ok":false,"error":"Release manifest digest failed."}') throw new Error('Legacy operator countercheck did not reproduce the reported digest failure.');
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, compatibility: { ...manifest.compatibility, changed: true } }));
+  const corrupt = run(virgo, installArgs, {}, 1);
+  if (corrupt.status !== 2 || !corrupt.stdout.includes('Release manifest digest failed.')) throw new Error('Compatibility tampering passed the install digest check.');
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  run(virgo, installArgs);
   const runtime = join(home, '.local/share/virgo/bootstrap/bun/1.3.14/bin/bun'), before = await stat(runtime);
   run('/bin/bash', [installer]);
   if ((await stat(runtime)).ino !== before.ino) throw new Error('Repeat acquisition replaced Bun.');
