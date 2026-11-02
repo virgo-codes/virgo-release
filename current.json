@@ -61,23 +61,23 @@
       }
     },
     {
-      "version": "2.2.16",
-      "release": "a41722eb3d7aaef3ee04a0bd326898a2854ae6c2598ed6b58bc1d251c8adb18c",
-      "sourceCommit": "4360e4bc91b5d8eaed665b5ead4f40ecf3992bc0",
-      "sourceTree": "96f6e2c2b8cfe683e164befe977069a00745b40d",
+      "version": "2.2.17",
+      "release": "91d34d26b01d5321509d71fd8083e95f6f3ac294593162e23db7d2058aeae694",
+      "sourceCommit": "1a73f6bdbd26356986c6e10a506bc0d81b83b276",
+      "sourceTree": "1a8ef5c1c1b43ba62d63518fb1e44acf4821e88d",
       "platform": {
         "os": "linux",
         "architecture": "arm64"
       },
       "bunVersion": "1.3.14",
-      "archiveSha256": "69ac5f7fec9e996e90a1d2cafa517ef4bc8db47e8c5b5ef3465c2244fc2398c9",
-      "manifestDigest": "247380c5b8dbe1bf309293f35c8bbbcdd57f323a6955a667d6fa30ebb7357450",
-      "cliSha256": "0bce5f4ce2eab1919078cf469b3998a8a899d2ae9550251cb3a72e83be95952b",
+      "archiveSha256": "342b053fd7f658f3b84c6f5278f3cff85a9d5f5686480f26c9e1bbe225cff691",
+      "manifestDigest": "da286bc8cfcb31bb52ca36b724d3a92018e6298053110da1da3b0bc36af695a3",
+      "cliSha256": "48a67786611194b04192da62551ed6d4b6ae93ecc8c84190d592e85180c093f9",
       "operator": {
-        "release": "a41722eb3d7aaef3ee04a0bd326898a2854ae6c2598ed6b58bc1d251c8adb18c",
-        "cliSha256": "0bce5f4ce2eab1919078cf469b3998a8a899d2ae9550251cb3a72e83be95952b",
-        "sourceCommit": "4360e4bc91b5d8eaed665b5ead4f40ecf3992bc0",
-        "sourceTree": "96f6e2c2b8cfe683e164befe977069a00745b40d"
+        "release": "91d34d26b01d5321509d71fd8083e95f6f3ac294593162e23db7d2058aeae694",
+        "cliSha256": "48a67786611194b04192da62551ed6d4b6ae93ecc8c84190d592e85180c093f9",
+        "sourceCommit": "1a73f6bdbd26356986c6e10a506bc0d81b83b276",
+        "sourceTree": "1a8ef5c1c1b43ba62d63518fb1e44acf4821e88d"
       }
     }
   ]
