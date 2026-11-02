@@ -12,7 +12,7 @@
   "manifestDigest": "c35771f675b81f4344e671c73f119378c34fcf3e6a4846fe146324ef24002ad2",
   "cliSha256": "e3c8d444207f03a1a5d424207e786f8c318f3bbaa6909068cb3150eb258366e7",
   "sourceRepository": "virgo-codes/virgo",
-  "launcherSha256": "84d8dba6c94abb8e190b6b4c70e349d9d532e6ebed7e11be86d0f5bd0db9008a",
+  "launcherSha256": "a6edc16b3cf7ab7259f58a50fd3b748d79c04e1f25484d0068b4c62741b59429",
   "operator": {
     "release": "71ea5e688d3f152d6cc509b7a524ba78c277d7623533772bc6357ad4160eaa00",
     "cliSha256": "0434cc6d26cc46e90a6e5adae8b04d00b803fc8dbcc8c4a530d61ce5e9c59dc4",
@@ -58,6 +58,26 @@
         "cliSha256": "5f30178a563416da6156de5f1f66c700e340c72ccc7a2b4d52e7147390e0e7f9",
         "sourceCommit": "f43b6c1ce191b6115725d85a17dff51b1f105994",
         "sourceTree": "43a505885cbf56a0d2ba81a92deaef593c910beb"
+      }
+    },
+    {
+      "version": "2.2.15",
+      "release": "48f51d195283a35ab004f4af4ea04f51d10ff55289ad1d08d57d3d1f9f1cee55",
+      "sourceCommit": "3ece79e2d46bc50ada35784d555f4b02b4c40912",
+      "sourceTree": "2803ba7f74d46010b30aaf291b65af894d893321",
+      "platform": {
+        "os": "linux",
+        "architecture": "arm64"
+      },
+      "bunVersion": "1.3.14",
+      "archiveSha256": "a4ea0eda4e155eb2235ebce72299b6b4898a5c2338b7a3dbce86c5632858ce1e",
+      "manifestDigest": "797368e634a47e50300f270a5cc3116dfc3d77a59295c6f788b99278dab0540d",
+      "cliSha256": "f7daa11f84242ee07297affd423f2872a80fda2b4c1158413a68e322e87abc45",
+      "operator": {
+        "release": "48f51d195283a35ab004f4af4ea04f51d10ff55289ad1d08d57d3d1f9f1cee55",
+        "cliSha256": "f7daa11f84242ee07297affd423f2872a80fda2b4c1158413a68e322e87abc45",
+        "sourceCommit": "3ece79e2d46bc50ada35784d555f4b02b4c40912",
+        "sourceTree": "2803ba7f74d46010b30aaf291b65af894d893321"
       }
     }
   ]
