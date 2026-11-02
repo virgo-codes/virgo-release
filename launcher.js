@@ -10,8 +10,11 @@ const CURRENT_URL = `https://raw.githubusercontent.com/${REPOSITORY}/main/curren
 const BUN_VERSION = '1.3.14';
 const BUN_SHA = 'e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233';
 const PLATFORM = process.platform === 'darwin' && process.arch === 'arm64' ? { os: 'macos', architecture: 'arm64' }
-  : process.platform === 'linux' && process.arch === 'x64' ? { os: 'linux', architecture: 'x64' } : undefined;
-const RUNTIME_SHA = process.platform === 'linux' ? '9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf983190cea6d715be2ad74' : BUN_SHA;
+  : process.platform === 'linux' && ['x64', 'arm64'].includes(process.arch) ? { os: 'linux', architecture: process.arch } : undefined;
+const RUNTIME_SHA = process.platform === 'linux'
+  ? process.arch === 'arm64' ? '37141662ebed915a2ab89313156e455e2a1374395f5f6760d06407f49406f086'
+    : process.arch === 'x64' ? '9fd36f87e4b90b07632b987a2e4ec81ca15a62c81bf983190cea6d715be2ad74' : undefined
+  : process.platform === 'darwin' && process.arch === 'arm64' ? BUN_SHA : undefined;
 const matchesPlatform = platform => PLATFORM && platform?.os === PLATFORM.os && platform?.architecture === PLATFORM.architecture;
 const HASH = /^[a-f0-9]{64}$/u;
 const stateRoot = process.env.VIRGO_LAUNCHER_STATE ?? join(homedir(), '.local', 'share', 'virgo', 'launcher');

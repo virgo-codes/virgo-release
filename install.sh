@@ -16,7 +16,13 @@ case "$(uname -s):$(uname -m)" in
     readonly BUN_PACKAGE='bun-linux-x64'
     hash_file() { sha256sum "$1" | awk '{print $1}'; }
     ;;
-  *) printf '%s\n' 'virgo acquisition: only macOS arm64 and Linux x64 are supported.' >&2; exit 1 ;;
+  Linux:aarch64|Linux:arm64)
+    readonly BUN_ARCHIVE_SHA='a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b'
+    readonly BUN_SHA='37141662ebed915a2ab89313156e455e2a1374395f5f6760d06407f49406f086'
+    readonly BUN_PACKAGE='bun-linux-aarch64'
+    hash_file() { sha256sum "$1" | awk '{print $1}'; }
+    ;;
+  *) printf '%s\n' 'virgo acquisition: only macOS arm64, Linux x64 and Linux arm64 are supported.' >&2; exit 1 ;;
 esac
 cleanup_dir=''
 cleanup() { [[ -z "$cleanup_dir" ]] || rm -rf -- "$cleanup_dir"; }
@@ -31,7 +37,7 @@ download() {
 verify() { [[ "$(hash_file "$1")" == "$2" ]] || fail 'checksum verification failed; existing command and installations are preserved. Repeat acquisition to retry.'; }
 [[ "${HOME:-}" == /* ]] || fail 'HOME must be an absolute path.'
 for executable in curl unzip awk; do command -v "$executable" >/dev/null || fail "$executable is unavailable."; done
-if [[ "$BUN_PACKAGE" == bun-linux-x64 ]]; then command -v sha256sum >/dev/null || fail 'sha256sum is unavailable.';
+if [[ "$BUN_PACKAGE" == bun-linux-* ]]; then command -v sha256sum >/dev/null || fail 'sha256sum is unavailable.';
 else command -v shasum >/dev/null || fail 'shasum is unavailable.'; fi
 
 state_root="$HOME/.local/share/virgo/launcher"
