@@ -242,7 +242,7 @@ async function installedCLI(requested) {
   const release = await verifiedReleaseCLI(active.releaseDirectory, verified.handle, artifact.digest, state.installedRelease);
   return { ...release, root, directory: selected, target, config, state };
 }
-async function verifiedReleaseCLI(releaseDirectory, handle, archiveDigest, release) {
+async function verifiedReleaseCLI(releaseDirectory, handle, archiveDigest, release, extra = []) {
   await directory(releaseDirectory);
   if (typeof handle !== 'string' || !isAbsolute(handle) || await realpath(handle) !== handle)
     fail('The verified installation archive is unavailable; restore the original cached distribution and retry.');
@@ -259,7 +259,7 @@ async function verifiedReleaseCLI(releaseDirectory, handle, archiveDigest, relea
     return matches[0];
   };
   const cli = join(releaseDirectory, 'bin', 'virgo');
-  for (const name of ['bin/virgo', 'release.json']) {
+  for (const name of ['bin/virgo', 'release.json', ...extra]) {
     const pin = entry(name), path = join(releaseDirectory, name);
     if (await realpath(path) !== path || digest(await regularBytes(path, 64 * 1024 * 1024)) !== pin.digest)
       fail('Installed CLI or descriptor checksum failed; restore the original release and retry.');
@@ -327,6 +327,56 @@ async function installedExecutable(selected, migration = false, planId) {
   return runtime.executable;
 }
 
+// Thin Host (new Hub): its root holds thin-host.json, not the legacy
+// installation-state.json/virgo.config.json. `virgo thin-host install` (L4
+// runtime/thin-host/cli.ts materializeRelease/install) lays out, under that root:
+//   cache/<archiveDigest>                     verified agent_host archive
+//   releases/<release>-<archiveDigest>/       extracted release (bin/virgo, bin/virgo-thin-host, release.json)
+//   release/current -> releases/<release>-<archiveDigest>   (moved by release swaps)
+//   thin-host.json  { ..., releaseDirectory: <realpath of the extracted release> }
+// The active release is release/current, else the recorded releaseDirectory
+// (the same order as L4 supervisedExecutable); it is verified exactly as
+// verifiedReleaseCLI verifies an installed release, plus bin/virgo-thin-host.
+const THIN_HOST_CONFIG = 'thin-host.json', THIN_HOST_OPERATIONS = ['start', 'stop', 'status'];
+async function present(path) {
+  try { await lstat(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+async function thinHostCLI(root) {
+  await directory(root);
+  const current = join(root, 'release', 'current');
+  const releaseDirectory = await present(current) ? await realpath(current)
+    : (await json(join(root, THIN_HOST_CONFIG), 1024 * 1024, true)).releaseDirectory;
+  if (typeof releaseDirectory !== 'string' || !isAbsolute(releaseDirectory)) fail('Thin-Host release is not installed; run virgo thin-host install.');
+  const parts = basename(releaseDirectory).split('-');
+  if (parts.length !== 2 || !parts.every(part => HASH.test(part))) fail('Thin-Host release is not a verified installed release directory.');
+  const handle = join(dirname(dirname(releaseDirectory)), 'cache', parts[1]);
+  return verifiedReleaseCLI(releaseDirectory, handle, parts[1], parts[0], ['bin/virgo-thin-host']);
+}
+export const thinHostDefaults = Object.freeze({ run, configuredRuntime, currentCLI, thinHostCLI, present });
+/** Thin-Host routes; undefined for every other argv so legacy dispatch is unchanged. */
+export async function thinHostRoute(argv, dependencies = thinHostDefaults) {
+  if (argv[0] === 'thin-host') {
+    if (argv[1] !== 'install') fail('Use virgo thin-host install ... or virgo --directory ABS thin-host start|stop|status.');
+    parseOptions(argv.slice(2));
+    // Same verified official current operator CLI as install/upgrade; no cached or Bun fallback.
+    const runtime = await dependencies.configuredRuntime();
+    const selected = await dependencies.currentCLI(undefined, true);
+    return dependencies.run(runtime.executable, [selected.path, ...argv]);
+  }
+  if (argv[0] === '--directory' && argv[2] === 'thin-host' && argv.length === 4 && THIN_HOST_OPERATIONS.includes(argv[3]) &&
+      typeof argv[1] === 'string' && isAbsolute(argv[1])) {
+    // The client resolves its --directory ("/root/." and "/root/" name /root);
+    // verify and compare the normalized root, but pass the ORIGINAL argv on.
+    const root = resolve(argv[1]);
+    if (await dependencies.present(join(root, THIN_HOST_CONFIG))) {
+      const cli = await dependencies.thinHostCLI(root);
+      const runtime = await dependencies.configuredRuntime();
+      return dependencies.run(runtime.executable, [cli.path, ...argv]);
+    }
+  }
+  return undefined;
+}
+
 function parseOptions(args) {
   const flags = new Map();
   for (let index = 0; index < args.length; index += 2) {
@@ -361,9 +411,11 @@ async function main(argv) {
   if (argv[0] === '--bootstrap-cache' && argv.length === 2) { const { current } = await currentCLI(argv[1]); if (current.operator) await currentCLI(argv[1], true); return 0; }
   await configuredRuntime();
   if (argv.length === 0 || (argv.length === 1 && ['--help', '-h'].includes(argv[0]))) {
-    console.log('Usage: virgo install|upgrade --mode local|host --machine ID [--root ABS] [options]\n       virgo rollback --mode local|host --machine ID --plan-id ID [options]\n       virgo --directory ABS <installed command>\nInstall and upgrade select the verified official current release unless an exact release and distribution are supplied.');
+    console.log('Usage: virgo install|upgrade --mode local|host --machine ID [--root ABS] [options]\n       virgo rollback --mode local|host --machine ID --plan-id ID [options]\n       virgo thin-host install --machine ID --hub-url URL --hub-audience AUD [options]\n       virgo --directory ABS thin-host start|stop|status\n       virgo --directory ABS <installed command>\nInstall and upgrade select the verified official current release unless an exact release and distribution are supplied.');
     return 0;
   }
+  const thin = await thinHostRoute(argv);
+  if (thin !== undefined) return thin;
   if (argv[0] === '--directory') {
     if (!argv[1] || !isAbsolute(argv[1])) fail('--directory requires an absolute installation path.');
     const selected = await installedCLI(argv[1]);
@@ -424,5 +476,7 @@ async function main(argv) {
   if (!flags.has('--release')) args.push('--release', selected.current.release, '--github-repository', REPOSITORY);
   return run(executable, [selected.path, ...args]);
 }
-try { process.exitCode = await main(process.argv.slice(2)); }
-catch (error) { console.error(`virgo: ${error.message ?? 'Command failed; retry using the preserved installation.'}`); process.exitCode = 1; }
+if (import.meta.main) {
+  try { process.exitCode = await main(process.argv.slice(2)); }
+  catch (error) { console.error(`virgo: ${error.message ?? 'Command failed; retry using the preserved installation.'}`); process.exitCode = 1; }
+}
