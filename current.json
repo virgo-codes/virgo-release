@@ -1,85 +1,85 @@
 {
-  "version": "2.2.24.15-hotfix.5",
-  "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-  "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-  "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5",
+  "version": "2.2.24.15-hotfix.6",
+  "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+  "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+  "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3",
   "platform": {
     "os": "macos",
     "architecture": "arm64"
   },
   "bunVersion": "1.3.14",
-  "archiveSha256": "f447e17a2cfc5f2c49a98e1d14d6ac95483c781d4d329b80693ad2859abadfcc",
-  "manifestDigest": "575efb0278730939c97706d2f2942333fc0d124afe42d1ae88fe9fb8e1bc1a2a",
-  "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
+  "archiveSha256": "274ccb9f99b1a06a82bf1bdc3c0410becd069b6be3b19b97b941bd47c936e644",
+  "manifestDigest": "00bd52e022c5a2dab1565b2ffedacf31504649df6b41debc890a463d1c698765",
+  "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
   "sourceRepository": "virgo-codes/virgo",
   "launcherSha256": "d155b890690710bff5024280fcfc55649fbaf04e9da1f7f1498473a8f6c01d54",
   "operator": {
-    "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-    "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
-    "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-    "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5"
+    "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+    "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
+    "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+    "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3"
   },
   "platforms": [
     {
-      "version": "2.2.24.15-hotfix.5",
-      "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-      "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-      "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5",
+      "version": "2.2.24.15-hotfix.6",
+      "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+      "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+      "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3",
       "platform": {
         "os": "macos",
         "architecture": "arm64"
       },
       "bunVersion": "1.3.14",
-      "archiveSha256": "f447e17a2cfc5f2c49a98e1d14d6ac95483c781d4d329b80693ad2859abadfcc",
-      "manifestDigest": "575efb0278730939c97706d2f2942333fc0d124afe42d1ae88fe9fb8e1bc1a2a",
-      "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
+      "archiveSha256": "274ccb9f99b1a06a82bf1bdc3c0410becd069b6be3b19b97b941bd47c936e644",
+      "manifestDigest": "00bd52e022c5a2dab1565b2ffedacf31504649df6b41debc890a463d1c698765",
+      "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
       "operator": {
-        "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-        "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
-        "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-        "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5"
+        "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+        "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
+        "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+        "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3"
       },
       "launcherSha256": "d155b890690710bff5024280fcfc55649fbaf04e9da1f7f1498473a8f6c01d54"
     },
     {
-      "version": "2.2.24.15-hotfix.5",
-      "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-      "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-      "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5",
+      "version": "2.2.24.15-hotfix.6",
+      "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+      "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+      "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3",
       "platform": {
         "os": "linux",
         "architecture": "x64"
       },
       "bunVersion": "1.3.14",
-      "archiveSha256": "8ce3d0a3ebb506c3df6aad80bf3ebade5d801f11bff8bb88b61d23fe3ca76959",
-      "manifestDigest": "575efb0278730939c97706d2f2942333fc0d124afe42d1ae88fe9fb8e1bc1a2a",
-      "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
+      "archiveSha256": "1b7b4f401dda21b016563a8ccbb30dfaa2983158392a90f6b745df3956521caf",
+      "manifestDigest": "00bd52e022c5a2dab1565b2ffedacf31504649df6b41debc890a463d1c698765",
+      "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
       "operator": {
-        "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-        "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
-        "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-        "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5"
+        "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+        "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
+        "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+        "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3"
       },
       "launcherSha256": "d155b890690710bff5024280fcfc55649fbaf04e9da1f7f1498473a8f6c01d54"
     },
     {
-      "version": "2.2.24.15-hotfix.5",
-      "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-      "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-      "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5",
+      "version": "2.2.24.15-hotfix.6",
+      "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+      "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+      "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3",
       "platform": {
         "os": "linux",
         "architecture": "arm64"
       },
       "bunVersion": "1.3.14",
-      "archiveSha256": "653ecf6cdf3fc51ca1222a58ea3b56f063d3060deef6cc660281ddb22a1f4c26",
-      "manifestDigest": "575efb0278730939c97706d2f2942333fc0d124afe42d1ae88fe9fb8e1bc1a2a",
-      "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
+      "archiveSha256": "7c8ed20f6c7f1e0c5669fd8bcc44ab7b6e36ba5ee0fd40899ab54e245a031aae",
+      "manifestDigest": "00bd52e022c5a2dab1565b2ffedacf31504649df6b41debc890a463d1c698765",
+      "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
       "operator": {
-        "release": "1b44e9a476053d1662f7a6c37383477a3ead8bb277db8d34a646e7fac928b1d0",
-        "cliSha256": "e8d05d8535337e7f1963412b4371a68897de00481f1f6842b258250e602f2938",
-        "sourceCommit": "9c5402d0e7750c58405cbc5008dcf3755013a429",
-        "sourceTree": "51ccfa2fed734b4b0984e707f342daea1a5837f5"
+        "release": "d4c621731c218300e3b42bf484bd6d487a807b0311b012862efcbce40168c14d",
+        "cliSha256": "5e603afb9be0329a74f07e8155f88749058e1d5339d87e9d714791978359f067",
+        "sourceCommit": "1ed5399da4c9d742862ba9921f958a73324b0dc3",
+        "sourceTree": "d1ca7900ed054a36fc85934aec0cede18b48cfd3"
       },
       "launcherSha256": "d155b890690710bff5024280fcfc55649fbaf04e9da1f7f1498473a8f6c01d54"
     }
